@@ -1,0 +1,189 @@
+// Prisma owns every table and column it can express. Columns it cannot
+// (pgvector, generated tsvector) are declared as Unsupported here and created
+// by the hand-written migration `*_chunk_search_columns`. See ADR 0005.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum RepoSourceType {
+  git
+  local
+
+  @@map("repo_source_type")
+}
+
+enum RepoStatus {
+  pending
+  ingesting
+  ready
+  failed
+
+  @@map("repo_status")
+}
+
+enum ChunkKind {
+  function
+  class
+  method
+  block
+
+  @@map("chunk_kind")
+}
+
+enum MessageRole {
+  system
+  user
+  assistant
+  tool
+
+  @@map("message_role")
+}
+
+enum IngestJobStatus {
+  queued
+  running
+  succeeded
+  failed
+
+  @@map("ingest_job_status")
+}
+
+enum LlmCallStatus {
+  succeeded
+  failed
+
+  @@map("llm_call_status")
+}
+
+/// A source repository. `url` is set for git sources, `localPath` for local ones
+/// (enforced by the `repos_location_check` constraint).
+model Repo {
+  id         String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sourceType RepoSourceType @map("source_type")
+  url        String?
+  localPath  String?        @map("local_path")
+  commitSha  String?        @map("commit_sha")
+  status     RepoStatus     @default(pending)
+  error      String?
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  files      File[]
+  ingestJobs IngestJob[]
+
+  @@map("repos")
+}
+
+model File {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  repoId    String   @map("repo_id") @db.Uuid
+  path      String
+  language  String
+  content   String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  repo   Repo    @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  chunks Chunk[]
+
+  @@unique([repoId, path])
+  @@map("files")
+}
+
+model Chunk {
+  id           String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fileId       String                       @map("file_id") @db.Uuid
+  symbol       String?
+  kind         ChunkKind
+  startLine    Int                          @map("start_line")
+  endLine      Int                          @map("end_line")
+  content      String
+  contentHash  String                       @map("content_hash")
+  /// Written with raw SQL. Dimension must match the embedding model (ADR 0006).
+  embedding    Unsupported("vector(1024)")?
+  /// GENERATED ALWAYS ... STORED column from symbol + content with the `simple`
+  /// dictionary. Never written by the app. The dbgenerated expression must match
+  /// the migration exactly (as Postgres prints it) or Prisma reports drift.
+  searchVector Unsupported("tsvector")?     @default(dbgenerated("(setweight(to_tsvector('simple'::regconfig, COALESCE(symbol, ''::text)), 'A'::\"char\") || setweight(to_tsvector('simple'::regconfig, content), 'B'::\"char\"))")) @map("search_vector")
+  createdAt    DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([fileId])
+  @@index([contentHash])
+  /// HNSW (vector_cosine_ops). Prisma cannot express the method; declared so it is not dropped.
+  @@index([embedding], map: "chunks_embedding_hnsw_idx")
+  @@index([searchVector], map: "chunks_search_vector_gin_idx", type: Gin)
+  @@map("chunks")
+}
+
+model ChatSession {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title     String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  messages Message[]
+  llmCalls LlmCall[]
+
+  @@map("chat_sessions")
+}
+
+model Message {
+  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId String      @map("session_id") @db.Uuid
+  role      MessageRole
+  content   String
+  toolCalls Json?       @map("tool_calls")
+  citations Json?
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@map("messages")
+}
+
+model IngestJob {
+  id         String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  repoId     String          @map("repo_id") @db.Uuid
+  status     IngestJobStatus @default(queued)
+  error      String?
+  startedAt  DateTime?       @map("started_at") @db.Timestamptz(3)
+  finishedAt DateTime?       @map("finished_at") @db.Timestamptz(3)
+  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([repoId])
+  @@map("ingest_jobs")
+}
+
+/// One row per LLM request, for cost and latency accounting.
+/// `sessionId` is null for calls made outside a chat (e.g. during ingestion).
+model LlmCall {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId     String?       @map("session_id") @db.Uuid
+  purpose       String
+  model         String
+  promptVersion String        @map("prompt_version")
+  inputTokens   Int           @map("input_tokens")
+  outputTokens  Int           @map("output_tokens")
+  costUsd       Decimal       @map("cost_usd") @db.Decimal(12, 6)
+  latencyMs     Int           @map("latency_ms")
+  status        LlmCallStatus
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  session ChatSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId])
+  @@index([createdAt])
+  @@map("llm_calls")
+}
