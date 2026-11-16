@@ -14,6 +14,7 @@ import type {
 } from '../ports/language-model';
 import type { LlmCallLog } from '../ports/llm-call-log';
 import type { RetrievalMode } from '../ports/retriever';
+import { unlimitedUsage, type UsageGuard } from '../ports/usage-guard';
 import type { CitableSource, ToolContext } from '../tools/tool';
 import type { ToolExecution, ToolRegistry } from '../tools/tool-registry';
 import { resolveCitations } from './citations';
@@ -24,7 +25,12 @@ import {
   validateCitations,
 } from './final-answer';
 import { ContextBudget, type Admission, type ContextBudgetLimits } from './context-budget';
-import { SessionNotFoundError, UnknownPromptVersionError } from './errors';
+import {
+  DailySpendCapReachedError,
+  SessionNotFoundError,
+  SessionRateLimitedError,
+  UnknownPromptVersionError,
+} from './errors';
 import type { LoopOutcome, LoopPolicy, LoopState } from './loop-policy';
 import type { SystemPrompt } from './system-prompt';
 
@@ -128,6 +134,8 @@ export interface AnswerQuestionDeps {
   policy: LoopPolicy;
   /** Limits of the ContextBudget each question gets for its tool results. */
   contextBudget: ContextBudgetLimits;
+  /** Per-session rate limit and daily spend cap (ADR 0020); no limits when absent. */
+  usage?: UsageGuard;
   clock?: { now(): number };
 }
 
@@ -213,8 +221,19 @@ const roundUsd = (usd: number) => Math.round(usd * 1e6) / 1e6;
 export class AnswerQuestion {
   private readonly clock: { now(): number };
 
+  private readonly usage: UsageGuard;
+
   constructor(private readonly deps: AnswerQuestionDeps) {
     this.clock = deps.clock ?? { now: () => Date.now() };
+    this.usage = deps.usage ?? unlimitedUsage;
+  }
+
+  /** Throws a readable DailySpendCapReachedError once today's spend has reached the cap. */
+  private async assertWithinSpendCap(): Promise<void> {
+    const spend = await this.usage.dailySpend();
+    if (spend.spentUsd >= spend.capUsd) {
+      throw new DailySpendCapReachedError(spend.spentUsd, spend.capUsd, spend.resetsAt);
+    }
   }
 
   async execute(
@@ -232,6 +251,17 @@ export class AnswerQuestion {
     const session = await chats.findSession(sessionId);
     if (!session) throw new SessionNotFoundError(sessionId);
     toolContext.repoId = session.repoId;
+    // Limits first: a refused question is not stored and costs nothing.
+    await this.assertWithinSpendCap();
+    const admission = await this.usage.admitQuestion(sessionId);
+    if (!admission.allowed) {
+      throw new SessionRateLimitedError(
+        sessionId,
+        admission.limit,
+        admission.windowSeconds,
+        admission.retryAfterSeconds,
+      );
+    }
     const history = await chats.listMessages(sessionId);
     await chats.addUserMessage(sessionId, question);
 
@@ -254,8 +284,13 @@ export class AnswerQuestion {
     let outcome: LoopOutcome;
     let last: ModelResponse | undefined;
 
-    /** One model call, counted against the limits. Null when the caller aborted it. */
+    /**
+     * One model call, counted against the limits. Null when the caller aborted
+     * it. Throws DailySpendCapReachedError, before calling, once today's spend
+     * has reached the cap: the loop stops there with a readable error.
+     */
     const call = async (allowToolCalls: boolean): Promise<ModelResponse | null> => {
+      await this.assertWithinSpendCap();
       const iteration = state.iterations + 1;
       let response: ModelResponse;
       try {
@@ -277,6 +312,7 @@ export class AnswerQuestion {
       usage.outputTokens += response.usage.outputTokens;
       // llm_calls.cost_usd keeps 6 decimals; round so sums carry no float noise.
       usage.costUsd = roundUsd(usage.costUsd + response.usage.costUsd);
+      await this.usage.recordSpend(response.usage.costUsd);
       last = response;
       return response;
     };

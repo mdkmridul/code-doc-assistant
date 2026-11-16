@@ -8,6 +8,7 @@ import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 import { ChatModule } from './chat/chat.module';
+import { MetricsModule } from './metrics/metrics.module';
 
 @Module({})
 export class AppModule {
@@ -22,6 +23,7 @@ export class AppModule {
         IngestionModule,
         // Also brings in SearchModule (search_code and the debug endpoint).
         ChatModule,
+        MetricsModule,
       ],
       controllers: [AppController],
       providers: [AppService],

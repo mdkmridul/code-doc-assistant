@@ -21,6 +21,7 @@ Run from the repo root:
 - `POST /repos` with `{"url": "https://github.com/<owner>/<repo>"}` or a multipart `file` (.zip) queues an ingest; `GET /repos/:id` shows its status (`queued → running → ready | failed`) and file/chunk counts.
 - `POST /sessions` `{"repoId"}` opens a Q&A session on a ready repo; `POST /sessions/:id/messages` `{"content", "promptVersion"?, "retrievalMode"?}` runs the agent loop (the optional fields pick another loaded prompt version or `vector`/`hybrid` retrieval for that question; used by evals) and returns the full answer as JSON (answer, outcome, iterations, toolCalls, citations, unverifiedReferences, usage). `GET /sessions/:id` returns the session and its messages. `POST /sessions/:id/messages/stream` is the same as SSE (token, tool_call, tool_result, done, error); `GET /repos/:id/events` streams ingest progress until ready/failed (ADR 0013). Every model call is a row in `llm_calls`.
 - `POST /repos/:id/search` `{"query", "topK"?, "pathPrefix"?, "language"?, "mode"?}` returns exactly what `search_code` would show the assistant, with no model call (`SearchRepository` use case). Evals measure recall@k with it.
+- `GET /metrics?days=7&sessions=50` — model calls, failed calls, tokens, cost and latency (mean, p95) from `llm_calls`: totals, per UTC day, per session (ADR 0020).
 - `npm run prisma:generate -w api` — regenerates the client into `apps/api/src/generated/prisma` (gitignored; also runs on `npm install`).
 - `make eval` / `make eval-retrieval` / `make eval-baseline` / `make eval-test [TOLERANCE=0.05]` — evals in `evals/` (a uv Python project; needs `uv`, and the API running). Golden set `evals/golden/ky.yaml` (ky at a pinned commit, uploaded as that commit's zip). `make eval` calls Claude (~$10); `eval-retrieval`, `eval-baseline` and `eval-test` make no model calls. Results go to `evals/results/` named `<prompt>@<version>__<mode>.md`; `evals/baseline.json` is the committed recall baseline that `eval-test` guards. See `evals/README.md` and ADR 0019.
 
@@ -78,6 +79,12 @@ Run from the repo root:
 - Every use case gets a unit test with fakes before it is wired to a transport.
 - Build only what the current step asks. No speculative features.
 - Every "chose X over Y" decision gets a one-paragraph ADR in `docs/decisions/` (`NNNN-short-title.md`). The README is assembled from these.
+
+## Logging, tracing and limits
+
+- The API logs JSON lines (`common/json-logger.ts`): `time`, `level`, `context`, `msg`, fields, and `requestId` (plus `jobId` in a worker) from `AsyncLocalStorage` (`common/request-context.ts`). Log structured data as `logger.log({ msg, ...fields })`. Trace one request with `docker compose logs api | grep '"requestId":"<id>"'`; clients may send `x-request-id`.
+- The request id reaches ingest jobs through the job data (`BullIngestQueue` / `IngestProcessor`) and every `llm_calls` row (`request_id`). Keep it out of the domain: infrastructure reads it from the context.
+- Usage limits (`UsageGuard` port, `RedisUsageGuard`): `SESSION_QUESTIONS_PER_MINUTE` and `DAILY_SPEND_CAP_USD`. `AnswerQuestion` checks them before storing a question and before every model call, and refuses with `SessionRateLimitedError` / `DailySpendCapReachedError` (HTTP 429, readable message the UI shows). Redis keys: `usage:rate:<session>:<minute>`, `usage:spend:<YYYY-MM-DD>`.
 
 ## Streaming
 

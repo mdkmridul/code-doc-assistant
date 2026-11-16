@@ -16,6 +16,8 @@ export const envSchema = z.object({
   CHAT_MAX_ITERATIONS: z.coerce.number().int().min(1).max(50),
   CHAT_TOKEN_BUDGET: z.coerce.number().int().min(1_000),
   CHAT_CONTEXT_BUDGET: z.coerce.number().int().min(1_000),
+  SESSION_QUESTIONS_PER_MINUTE: z.coerce.number().int().min(1),
+  DAILY_SPEND_CAP_USD: z.coerce.number().positive(),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

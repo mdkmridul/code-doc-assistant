@@ -2,6 +2,7 @@ import {
   ArgumentsHost,
   BadGatewayException,
   BadRequestException,
+  HttpStatus,
   Catch,
   ConflictException,
   ExceptionFilter,
@@ -11,9 +12,11 @@ import {
 import { BaseExceptionFilter } from '@nestjs/core';
 import Anthropic from '@anthropic-ai/sdk';
 import {
+  DailySpendCapReachedError,
   RepoNotFoundError,
   RepoNotReadyError,
   SessionNotFoundError,
+  SessionRateLimitedError,
   ToolInputError,
   UnknownPromptVersionError,
 } from '@cda/domain';
@@ -28,6 +31,8 @@ import {
   RepoNotReadyError,
   UnknownPromptVersionError,
   ToolInputError,
+  SessionRateLimitedError,
+  DailySpendCapReachedError,
   Anthropic.APIError,
 )
 export class ChatErrorFilter
@@ -35,10 +40,30 @@ export class ChatErrorFilter
   implements ExceptionFilter
 {
   catch(error: Error, host: ArgumentsHost): void {
+    if (error instanceof SessionRateLimitedError) {
+      host
+        .switchToHttp()
+        .getResponse<{ setHeader(name: string, value: string): void }>()
+        .setHeader('Retry-After', String(error.retryAfterSeconds));
+    }
     super.catch(this.toHttp(error), host);
   }
 
   private toHttp(error: Error): HttpException {
+    // Usage limits (ADR 0020): 429 with the readable message the UI shows.
+    if (
+      error instanceof SessionRateLimitedError ||
+      error instanceof DailySpendCapReachedError
+    ) {
+      return new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          error: error.name,
+          message: error.message,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
     if (
       error instanceof SessionNotFoundError ||
       error instanceof RepoNotFoundError

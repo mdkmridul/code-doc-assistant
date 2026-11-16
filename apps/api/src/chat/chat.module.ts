@@ -19,6 +19,9 @@ import { PrismaEndpointCatalog } from '../infrastructure/prisma/prisma-endpoint-
 import { PrismaLlmCallLog } from '../infrastructure/prisma/prisma-llm-call-log';
 import { PrismaModule } from '../infrastructure/prisma/prisma.module';
 import { PrismaRepoStore } from '../infrastructure/prisma/prisma-repo-store';
+import { RedisModule } from '../infrastructure/redis/redis.module';
+import { RedisService } from '../infrastructure/redis/redis.service';
+import { RedisUsageGuard } from '../infrastructure/redis/redis-usage-guard';
 import { PrismaSourceFileReader } from '../infrastructure/prisma/prisma-source-file-reader';
 import { SearchModule } from '../search/search.module';
 import { ANSWER_QUESTION_PROMPT } from './chat.constants';
@@ -27,7 +30,7 @@ import { SessionsController } from './sessions.controller';
 
 /** Q&A sessions: the agent loop, the model adapter and their stores. */
 @Module({
-  imports: [PrismaModule, SearchModule],
+  imports: [PrismaModule, RedisModule, SearchModule],
   controllers: [SessionsController],
   providers: [
     PrismaChatStore,
@@ -79,6 +82,7 @@ import { SessionsController } from './sessions.controller';
         AnthropicLanguageModel,
         ToolRegistry,
         PrismaLlmCallLog,
+        RedisService,
       ],
       useFactory: (
         config: AppConfig,
@@ -86,12 +90,17 @@ import { SessionsController } from './sessions.controller';
         model: AnthropicLanguageModel,
         tools: ToolRegistry,
         llmCalls: PrismaLlmCallLog,
+        redis: RedisService,
       ) =>
         new AnswerQuestion({
           chats,
           model,
           tools,
           llmCalls,
+          usage: new RedisUsageGuard(redis.client, {
+            questionsPerMinute: config.SESSION_QUESTIONS_PER_MINUTE,
+            dailySpendCapUsd: config.DAILY_SPEND_CAP_USD,
+          }),
           prompt: loadPrompt(
             ANSWER_QUESTION_PROMPT.name,
             ANSWER_QUESTION_PROMPT.version,

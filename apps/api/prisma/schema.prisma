@@ -211,11 +211,14 @@ model LlmCall {
   costUsd       Decimal       @map("cost_usd") @db.Decimal(12, 6)
   latencyMs     Int           @map("latency_ms")
   status        LlmCallStatus
+  /// The HTTP request (x-request-id) that made the call, for tracing logs to rows (ADR 0020).
+  requestId     String?       @map("request_id")
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
   session ChatSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
 
   @@index([sessionId])
   @@index([createdAt])
+  @@index([requestId])
   @@map("llm_calls")
 }

@@ -12,6 +12,8 @@ const validEnv = {
   CHAT_MAX_ITERATIONS: '6',
   CHAT_TOKEN_BUDGET: '200000',
   CHAT_CONTEXT_BUDGET: '40000',
+  SESSION_QUESTIONS_PER_MINUTE: '6',
+  DAILY_SPEND_CAP_USD: '25',
 };
 
 describe('parseConfig', () => {
@@ -22,6 +24,8 @@ describe('parseConfig', () => {
       CHAT_MAX_ITERATIONS: 6,
       CHAT_TOKEN_BUDGET: 200000,
       CHAT_CONTEXT_BUDGET: 40000,
+      SESSION_QUESTIONS_PER_MINUTE: 6,
+      DAILY_SPEND_CAP_USD: 25,
     });
   });
 

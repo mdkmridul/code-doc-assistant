@@ -14,6 +14,7 @@ import type {
   ToolCall,
 } from '../ports/language-model';
 import type { LlmCallLog, LlmCallRecord } from '../ports/llm-call-log';
+import type { DailySpend, QuestionAdmission, UsageGuard } from '../ports/usage-guard';
 import type { CitableSource, Tool, ToolContext } from '../tools/tool';
 
 /** A scripted step that never finishes on its own: it rejects only when aborted. */
@@ -174,5 +175,34 @@ export class SteppingClock {
   now(): number {
     this.t += 25;
     return this.t;
+  }
+}
+
+/** A UsageGuard with settable limits that records every spend. */
+export class FakeUsageGuard implements UsageGuard {
+  readonly spends: number[] = [];
+  readonly admitted: string[] = [];
+  /** Questions each session may ask; Infinity = no limit. */
+  questionLimit = Number.POSITIVE_INFINITY;
+  capUsd = Number.POSITIVE_INFINITY;
+  spentUsd = 0;
+  readonly resetsAt = new Date('2026-11-17T00:00:00.000Z');
+
+  admitQuestion(sessionId: string): Promise<QuestionAdmission> {
+    if (this.admitted.filter((s) => s === sessionId).length >= this.questionLimit) {
+      return Promise.resolve({ allowed: false, limit: this.questionLimit, windowSeconds: 60, retryAfterSeconds: 42 });
+    }
+    this.admitted.push(sessionId);
+    return Promise.resolve({ allowed: true });
+  }
+
+  dailySpend(): Promise<DailySpend> {
+    return Promise.resolve({ spentUsd: this.spentUsd, capUsd: this.capUsd, resetsAt: this.resetsAt });
+  }
+
+  recordSpend(costUsd: number): Promise<void> {
+    this.spends.push(costUsd);
+    this.spentUsd += costUsd;
+    return Promise.resolve();
   }
 }

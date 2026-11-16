@@ -1,7 +1,9 @@
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
-import { IngestRepo, type IngestFilesStats, type IngestJob } from '@cda/domain';
+import { IngestRepo, type IngestFilesStats } from '@cda/domain';
 import type { Job } from 'bullmq';
+import { runWithContext } from '../common/request-context';
+import type { QueuedIngestJob } from './bull-ingest-queue';
 import { INGEST_QUEUE } from './ingestion.constants';
 
 /** One ingest at a time keeps embedding requests under provider rate limits. */
@@ -13,23 +15,45 @@ export class IngestProcessor extends WorkerHost {
     super();
   }
 
-  async process(job: Job<IngestJob>): Promise<IngestFilesStats> {
+  /** Runs in the context of the request that queued the job (ADR 0020). */
+  process(job: Job<QueuedIngestJob>): Promise<IngestFilesStats> {
+    const jobId = job.id ?? job.data.ingestKey;
+    const requestId = job.data.requestId ?? `job:${jobId}`;
+    return runWithContext({ requestId, jobId }, () => this.run(job.data));
+  }
+
+  private async run(data: QueuedIngestJob): Promise<IngestFilesStats> {
     const started = Date.now();
-    this.logger.log(
-      `Ingesting repo ${job.data.repoId} (${job.data.source.type})`,
-    );
-    const stats = await this.ingestRepo.execute(job.data);
-    this.logger.log(
-      `Repo ${job.data.repoId} ready: ${stats.files} files, ${stats.chunks} chunks, ` +
-        `${stats.embeddingRequests} embedding requests in ${Date.now() - started} ms`,
-    );
+    this.logger.log({
+      msg: 'ingest started',
+      repoId: data.repoId,
+      source: data.source.type,
+    });
+    const stats = await this.ingestRepo.execute(data);
+    this.logger.log({
+      msg: 'ingest finished',
+      repoId: data.repoId,
+      files: stats.files,
+      chunks: stats.chunks,
+      endpoints: stats.endpoints,
+      embeddingRequests: stats.embeddingRequests,
+      durationMs: Date.now() - started,
+    });
     return stats;
   }
 
   @OnWorkerEvent('failed')
-  onFailed(job: Job<IngestJob> | undefined, error: Error): void {
-    this.logger.error(
-      `Ingest of repo ${job?.data.repoId ?? '?'} failed: ${error.message}`,
+  onFailed(job: Job<QueuedIngestJob> | undefined, error: Error): void {
+    const jobId = job?.id ?? job?.data.ingestKey;
+    runWithContext(
+      { requestId: job?.data.requestId ?? `job:${jobId ?? '?'}`, jobId },
+      () => {
+        this.logger.error({
+          msg: 'ingest failed',
+          repoId: job?.data.repoId,
+          error: error.message,
+        });
+      },
     );
   }
 }
