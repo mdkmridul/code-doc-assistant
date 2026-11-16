@@ -6,7 +6,10 @@
   "license": "ISC",
   "author": "Mridul Hemani",
   "type": "commonjs",
-  "workspaces":["apps/*", "packages/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "dev": "npm run dev --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",

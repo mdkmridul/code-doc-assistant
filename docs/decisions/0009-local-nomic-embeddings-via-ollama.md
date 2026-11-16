@@ -1,0 +1,9 @@
+# 0009 — Local `nomic-embed-text` via Ollama, GPU when available
+
+Supersedes ADR 0006. Chunks are embedded by `nomic-embed-text` (v1.5, 137M parameters, 768 dimensions), served by an Ollama container in `docker-compose.yml`, rather than by Voyage's hosted `voyage-code-3`. A local model needs no API key and has no rate limits, and source code never leaves the machine, which matters for private zip uploads.
+
+We chose it over `nomic-embed-code` for speed. That model is a 7B Qwen2.5-Coder derivative with 3584-dimension output, which would need `halfvec` to be indexable. Nomic publishes only GGUF builds on Hugging Face (the smallest sensible one is 4.4 GB), and its embeddings would have been roughly 50 times slower. We also rejected tiny models such as `all-minilm`, which read only 256 tokens and would discard most of each 60-line chunk.
+
+The trade-off is retrieval quality: neither `voyage-code-3` nor `nomic-embed-code` is used, and nomic-embed-text is a general text model, not one trained specifically on code. Measured on real chunks, it embeds about 245 ms per chunk on CPU (8 cores) and about 10.5 ms per chunk on an RTX 4070, roughly 23 times faster. So `docker-compose.gpu.yml` gives Ollama the NVIDIA GPU. It is an opt-in override enabled per machine through `COMPOSE_FILE` in `.env`, not part of the base file, so `docker compose up` still works on machines without an NVIDIA GPU, just slower.
+
+Ollama's build has a 2048-token context. Longer inputs are cut (`truncate: true`) rather than rejected, and 60-line chunks rarely get close. Inputs must start with the task prefixes `search_document: ` (indexing) or `search_query: ` (questions); `OllamaEmbedder` adds them. `chunks.embedding` is `vector(768)` with cosine HNSW. Switching models again means a new migration, a rebuilt index and a full re-embed, because vectors from different models are not comparable.

@@ -9,6 +9,7 @@ export const envSchema = z.object({
   API_PORT: z.coerce.number().int().min(1).max(65535),
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
   REDIS_URL: z.url({ protocol: /^rediss?$/ }),
+  OLLAMA_URL: z.url({ protocol: /^https?$/ }),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

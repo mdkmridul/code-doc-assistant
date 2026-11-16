@@ -12,9 +12,10 @@ Run from the repo root:
 
 - `npm install` — installs every workspace. Use only the root lockfile; don't run `npm install` inside a workspace.
 - `npm run lint` / `npm run typecheck` / `npm test` — cover all three workspaces; all must pass before a step is done.
-- `docker compose up -d` — starts Postgres (pgvector) and Redis using the values in the root `.env`.
-- `npm run start:dev -w api` — runs the API; it logs `Connected to Postgres ... (pgvector x.y.z)` and `Connected to Redis` on a healthy boot.
+- `docker compose up -d` — starts Postgres (pgvector), Redis and Ollama (local embeddings), and pulls `nomic-embed-text` on first run (`ollama-pull` service), using the values in the root `.env`. On NVIDIA machines, `COMPOSE_FILE` in `.env` adds `docker-compose.gpu.yml` (about 23x faster embeddings); `docker compose exec ollama ollama ps` should show `100% GPU`.
+- `npm run start:dev -w api` — runs the API; it logs `Connected to Postgres ... (pgvector x.y.z)`, `Connected to Redis` and `Connected to Ollama ... (nomic-embed-text)` on a healthy boot.
 - `npm run db:deploy -w api` — applies migrations. `npm run db:migrate -w api` creates one from `schema.prisma` changes (dev). `npm run db:seed -w api` inserts the sample repo.
+- `POST /repos` with `{"url": "https://github.com/<owner>/<repo>"}` or a multipart `file` (.zip) queues an ingest; `GET /repos/:id` shows its status (`queued → running → ready | failed`) and file/chunk counts.
 - `npm run prisma:generate -w api` — regenerates the client into `apps/api/src/generated/prisma` (gitignored; also runs on `npm install`).
 
 ## Code rules
@@ -36,7 +37,16 @@ Run from the repo root:
 - Prisma cannot write `Unsupported` columns: set embeddings with `$executeRaw` and a `::vector` cast.
 - Full-text search uses the `simple` dictionary (no stemming), so query with `to_tsquery('simple', ...)`.
 
+## Embeddings
+
+- `nomic-embed-text` via Ollama, 768 dimensions (ADR 0009). The model, `NOMIC_DIMENSIONS`, `vector(768)` in `schema.prisma` and the migration, and the seed's `EMBEDDING_DIMENSIONS` must all agree. Changing model means a new migration and re-ingesting every repo.
+- Ollama's nomic-embed-text has a 2048-token context; longer inputs are truncated, not rejected. Keep chunks well under it.
+- nomic needs task prefixes: `OllamaEmbedder` adds `search_document: ` (indexing) or `search_query: ` (questions, via `inputType: 'query'`). Never embed raw text with it.
+
 ## Architecture
+
+- Domain use cases (`packages/domain/src/ingestion`) are plain classes; `apps/api/src/ingestion/ingestion.module.ts` builds them with factory providers. Don't add Nest decorators to domain code.
+- `@cda/domain` runs from `dist/` (ADR 0008). After changing domain code, restart the API; `prestart*`/`prebuild` rebuild it. Type-check, lint and tests read the source directly.
 
 - Controllers, processors and the MCP entrypoint call **use cases**.
 - Use cases depend on **ports** defined in `packages/domain`.
@@ -52,5 +62,6 @@ Run from the repo root:
 
 - TypeScript versions differ: `packages/domain` and the root are on 6.0.x, `apps/api` and `apps/web` on 5.9.x. `typescript-eslint` (all workspaces) runs on the root 6.0.x. TypeScript 6 no longer auto-includes `@types`, so tsconfigs list `types` explicitly, and it always enables `esModuleInterop`. Write code that type-checks on both.
 - `moduleResolution: node`/`node10` is removed in TypeScript 7 and deprecated in 6; `ignoreDeprecations` is not a fix.
+- BullMQ ingest jobs use `jobId = ingest_key` and are removed when they finish. Don't set `removeOnFail: false` or retain failed jobs: a re-queue with the same jobId would be silently ignored.
 - Prisma is pinned to 7.x. npm's `latest` tag is an 8.0 release candidate that needs Node >= 22.18.
 - Text files must use LF line endings (`.gitattributes`). CRLF breaks `prettier/prettier` in the API lint.

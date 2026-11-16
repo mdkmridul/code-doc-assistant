@@ -5,6 +5,7 @@ const validEnv = {
   API_PORT: '3001',
   DATABASE_URL: 'postgresql://cda:cda@localhost:5432/cda',
   REDIS_URL: 'redis://localhost:6379',
+  OLLAMA_URL: 'http://localhost:11434',
 };
 
 describe('parseConfig', () => {

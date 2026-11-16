@@ -1,0 +1,16 @@
+# Optional override: runs Ollama on an NVIDIA GPU (~23x faster embeddings than
+# CPU; ADR 0009). Needs an NVIDIA driver and Docker GPU support (Docker Desktop
+# with WSL2 on Windows, or nvidia-container-toolkit on Linux).
+#
+# Enable it per machine in the root .env:
+#   COMPOSE_PATH_SEPARATOR=,
+#   COMPOSE_FILE=docker-compose.yml,docker-compose.gpu.yml
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

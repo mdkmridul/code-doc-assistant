@@ -8,8 +8,8 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { loadConfig } from '../src/config/load-config';
 
-/** Must match vector(1024) in the chunk_search_columns migration. */
-const EMBEDDING_DIMENSIONS = 1024;
+/** Must match vector(768) in the nomic_768_embeddings migration (ADR 0009). */
+const EMBEDDING_DIMENSIONS = 768;
 const SEED_REPO_PATH = '/seed/example-repo';
 
 const FILE_CONTENT = `export class UserService {
@@ -43,6 +43,7 @@ async function main(): Promise<void> {
       data: {
         sourceType: 'local',
         localPath: SEED_REPO_PATH,
+        ingestKey: 'seed:example-repo',
         status: 'ready',
         files: {
           create: {

@@ -31,6 +31,34 @@ services:
       timeout: 3s
       retries: 10
 
+  # Local embedding model server (nomic-embed-text, ADR 0009). CPU only, so it
+  # runs anywhere; the model is small enough that a GPU is not required.
+  ollama:
+    image: ollama/ollama:0.40.16
+    restart: unless-stopped
+    ports:
+      - '${OLLAMA_PORT:?set OLLAMA_PORT in .env}:11434'
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ['CMD', 'ollama', 'list']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot: downloads the embedding model into the shared volume, then exits.
+  # A no-op once the model is present.
+  ollama-pull:
+    image: ollama/ollama:0.40.16
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ['ollama', 'pull', 'nomic-embed-text']
+    restart: 'no'
+
 volumes:
   postgres-data:
   redis-data:
+  ollama-data:
