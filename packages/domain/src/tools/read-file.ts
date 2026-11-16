@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Excerpt } from '../events';
 import type { Citation } from '../ports/chat-store';
 import type { SourceFileReader } from '../ports/source-file-reader';
 import { normalizePathPrefix } from './search-code';
@@ -6,6 +7,9 @@ import type { Tool, ToolContext } from './tool';
 
 /** Most lines one call returns; enough for most functions, small enough to stay cheap. */
 export const READ_FILE_MAX_LINES = 200;
+
+/** Excerpts are stored with each answer; this keeps one message from growing large. */
+const EXCERPT_MAX_CHARS = 8_000;
 
 export const readFileInputSchema = z
   .object({
@@ -111,6 +115,24 @@ export class ReadFileTool implements Tool<ReadFileInput, ReadFileOutput> {
       content,
       ...(endLine < requestedEnd && { nextStartLine: endLine + 1 }),
     };
+  }
+
+  summarize(output: ReadFileOutput): string {
+    return `${output.path}:${String(output.startLine)}-${String(output.endLine)} of ${String(output.totalLines)} lines`;
+  }
+
+  excerpts(output: ReadFileOutput): Excerpt[] {
+    // The model saw numbered lines; the panel shows the code itself.
+    const text = output.content.replace(/^\d+\| /gm, '');
+    return [
+      {
+        path: output.path,
+        startLine: output.startLine,
+        endLine: output.endLine,
+        text: text.length > EXCERPT_MAX_CHARS ? text.slice(0, EXCERPT_MAX_CHARS) : text,
+        source: 'read',
+      },
+    ];
   }
 
   citations(output: ReadFileOutput): Citation[] {

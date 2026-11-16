@@ -7,6 +7,7 @@ import type {
   ToolCallTrace,
 } from '../ports/chat-store';
 import type {
+  CompleteOptions,
   LanguageModel,
   ModelRequest,
   ModelResponse,
@@ -15,21 +16,40 @@ import type {
 import type { LlmCallLog, LlmCallRecord } from '../ports/llm-call-log';
 import type { Tool } from '../tools/tool';
 
-/** A scripted model: returns (or throws) the next scripted step on each call. */
+/** A scripted step that never finishes on its own: it rejects only when aborted. */
+export const HANG = 'hang' as const;
+
+/**
+ * A scripted model: returns (or throws) the next scripted step on each call.
+ * A step's text is streamed word by word through `onTextDelta` first.
+ */
 export class FakeLanguageModel implements LanguageModel {
   readonly modelName = 'fake-model';
   /** Deep copies of every request, as the model received it. */
   readonly requests: ModelRequest[] = [];
+  /** Called when a call starts, e.g. to abort mid-call in a test. */
+  onCall?: (callNumber: number) => void;
 
-  constructor(private readonly script: (Partial<ModelResponse> | Error)[]) {}
+  constructor(private readonly script: (Partial<ModelResponse> | Error | typeof HANG)[]) {}
 
-  complete(request: ModelRequest): Promise<ModelResponse> {
+  complete(request: ModelRequest, options: CompleteOptions = {}): Promise<ModelResponse> {
     this.requests.push(structuredClone(request));
+    this.onCall?.(this.requests.length);
     const step = this.script.shift();
     if (step === undefined) {
       return Promise.reject(new Error('FakeLanguageModel: script exhausted'));
     }
+    if (step === HANG) {
+      return new Promise((_, reject) => {
+        const { signal } = options;
+        if (signal?.aborted) reject(new Error('aborted'));
+        signal?.addEventListener('abort', () => { reject(new Error('aborted')); });
+      });
+    }
     if (step instanceof Error) return Promise.reject(step);
+    for (const word of (step.text ?? '').split(/(?<= )/)) {
+      if (word !== '') options.onTextDelta?.(word);
+    }
     const toolCalls = step.toolCalls ?? [];
     return Promise.resolve({
       model: 'fake-model',

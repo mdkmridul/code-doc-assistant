@@ -21,7 +21,7 @@ export class AppModule {
         BullModule.forRoot({ connection: { url: config.REDIS_URL } }),
         IngestionModule,
         // Also brings in SearchModule (search_code and the debug endpoint).
-        ChatModule.forRoot(config),
+        ChatModule,
       ],
       controllers: [AppController],
       providers: [AppService],

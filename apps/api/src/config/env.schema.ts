@@ -11,6 +11,7 @@ export const envSchema = z.object({
   REDIS_URL: z.url({ protocol: /^rediss?$/ }),
   OLLAMA_URL: z.url({ protocol: /^https?$/ }),
   ANTHROPIC_API_KEY: z.string().trim().min(1),
+  WEB_ORIGIN: z.url({ protocol: /^https?$/ }),
   ANTHROPIC_MODEL: z.string().trim().min(1),
   CHAT_MAX_ITERATIONS: z.coerce.number().int().min(1).max(50),
   CHAT_TOKEN_BUDGET: z.coerce.number().int().min(1_000),

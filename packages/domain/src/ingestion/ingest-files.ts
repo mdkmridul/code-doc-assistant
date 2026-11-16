@@ -54,6 +54,8 @@ export class IngestFiles {
     repoId: string,
     files: AsyncIterable<SourceFile> | Iterable<SourceFile>,
     options: IngestFilesOptions = DEFAULT_INGEST_FILES_OPTIONS,
+    /** Called after each file is stored, with running totals. */
+    onFileSaved?: (stats: Readonly<IngestFilesStats>) => void,
   ): Promise<IngestFilesStats> {
     const batchSize = Math.min(options.batchSize, this.deps.embedder.maxBatchSize);
     const stats: IngestFilesStats = { files: 0, chunks: 0, embeddingRequests: 0 };
@@ -75,6 +77,7 @@ export class IngestFiles {
         await this.deps.store.saveFile(repoId, file, embedded);
         stats.files += 1;
         stats.chunks += chunks.length;
+        onFileSaved?.(stats);
       }
       pending = [];
       pendingChunks = 0;

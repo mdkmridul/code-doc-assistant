@@ -13,6 +13,11 @@ import { OllamaEmbedder } from '../infrastructure/embedding/ollama-embedder';
 import { PrismaChunkStore } from '../infrastructure/prisma/prisma-chunk-store';
 import { PrismaModule } from '../infrastructure/prisma/prisma.module';
 import { PrismaRepoStore } from '../infrastructure/prisma/prisma-repo-store';
+import { RedisModule } from '../infrastructure/redis/redis.module';
+import {
+  RedisProgressPublisher,
+  RepoProgressHub,
+} from '../infrastructure/redis/repo-progress';
 import { TempWorkspaceFactory } from '../infrastructure/workspace/temp-workspace-factory';
 import { BullIngestQueue } from './bull-ingest-queue';
 import { IngestProcessor } from './ingest.processor';
@@ -25,7 +30,11 @@ import { ReposController } from './repos.controller';
  * Nest decorators, so each is built by a factory provider.
  */
 @Module({
-  imports: [PrismaModule, BullModule.registerQueue({ name: INGEST_QUEUE })],
+  imports: [
+    PrismaModule,
+    RedisModule,
+    BullModule.registerQueue({ name: INGEST_QUEUE }),
+  ],
   controllers: [ReposController],
   providers: [
     PrismaRepoStore,
@@ -34,6 +43,8 @@ import { ReposController } from './repos.controller';
     TempWorkspaceFactory,
     RepoSourceResolver,
     IngestProcessor,
+    RedisProgressPublisher,
+    RepoProgressHub,
     {
       provide: OllamaEmbedder,
       inject: [APP_CONFIG],
@@ -59,12 +70,18 @@ import { ReposController } from './repos.controller';
     },
     {
       provide: IngestRepo,
-      inject: [PrismaRepoStore, TempWorkspaceFactory, IngestFiles],
+      inject: [
+        PrismaRepoStore,
+        TempWorkspaceFactory,
+        IngestFiles,
+        RedisProgressPublisher,
+      ],
       useFactory: (
         repos: PrismaRepoStore,
         workspaces: TempWorkspaceFactory,
         ingestFiles: IngestFiles,
-      ) => new IngestRepo(repos, workspaces, ingestFiles),
+        progress: RedisProgressPublisher,
+      ) => new IngestRepo(repos, workspaces, ingestFiles, progress),
     },
   ],
 })

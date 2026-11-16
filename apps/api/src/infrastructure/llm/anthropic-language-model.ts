@@ -2,6 +2,7 @@ import { Logger, OnModuleInit } from '@nestjs/common';
 import type {
   ConversationMessage,
   LanguageModel,
+  CompleteOptions,
   ModelRequest,
   ModelResponse,
   ModelStopReason,
@@ -37,7 +38,7 @@ const STOP_REASONS: Partial<Record<string, ModelStopReason>> = {
 };
 
 /**
- * LanguageModel on Claude via the Messages API (manual tool loop, ADR 0011).
+ * LanguageModel on Claude via the streaming Messages API (manual tool loop, ADR 0011).
  *
  * - Assistant turns from the current loop are replayed with their original
  *   content blocks (thinking included): Claude Opus 5.5 binds thinking blocks
@@ -77,19 +78,33 @@ export class AnthropicLanguageModel implements LanguageModel, OnModuleInit {
     );
   }
 
-  async complete(request: ModelRequest): Promise<ModelResponse> {
-    const response = await this.client.beta.messages.create({
-      model: this.modelName,
-      max_tokens: this.maxTokens,
-      system: request.system,
-      messages: request.messages.map(toMessageParam),
-      tools: request.tools.map(toToolParam),
-      tool_choice: request.allowToolCalls ? { type: 'auto' } : { type: 'none' },
-      output_config: { effort: this.effort },
-      cache_control: { type: 'ephemeral' },
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
-    });
+  async complete(
+    request: ModelRequest,
+    { onTextDelta, signal }: CompleteOptions = {},
+  ): Promise<ModelResponse> {
+    // Streamed so answer text reaches the client as it is generated. Tool
+    // inputs are small (queries, paths), so they are not streamed eagerly:
+    // the API delivers and validates them whole.
+    const stream = this.client.beta.messages.stream(
+      {
+        model: this.modelName,
+        max_tokens: this.maxTokens,
+        system: request.system,
+        messages: request.messages.map(toMessageParam),
+        tools: request.tools.map(toToolParam),
+        tool_choice: request.allowToolCalls
+          ? { type: 'auto' }
+          : { type: 'none' },
+        output_config: { effort: this.effort },
+        cache_control: { type: 'ephemeral' },
+        betas: ['server-side-fallback-2026-07-01'],
+        fallbacks: 'default',
+      },
+      // Aborting cancels the HTTP stream; finalMessage() then rejects.
+      { signal },
+    );
+    if (onTextDelta) stream.on('text', (delta) => onTextDelta(delta));
+    const response = await stream.finalMessage();
 
     const toolCalls = response.content
       .filter((block) => block.type === 'tool_use')

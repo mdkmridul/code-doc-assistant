@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export type RepoStatus = 'queued' | 'running' | 'ready' | 'failed';
+export type { RepoStatus } from './events';
 
 /** Where a repository's files come from, pinned to an exact version. */
 export type RepoSource =

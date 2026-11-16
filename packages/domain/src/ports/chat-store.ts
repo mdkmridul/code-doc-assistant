@@ -1,22 +1,12 @@
+import type { Citation, ToolCallTrace } from '../events';
+
+export type { Citation, ToolCallTrace } from '../events';
+
 export interface ChatSession {
   id: string;
   repoId: string;
   /** e.g. "https://github.com/sindresorhus/ky" or "my-project.zip". */
   repoLabel: string;
-}
-
-/** A source location an answer relied on. */
-export interface Citation {
-  path: string;
-  startLine: number;
-  endLine: number;
-}
-
-/** A tool call made while answering, kept for transparency and debugging. */
-export interface ToolCallTrace {
-  name: string;
-  input: unknown;
-  isError: boolean;
 }
 
 export type StoredMessage =

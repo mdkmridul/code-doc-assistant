@@ -7,6 +7,7 @@ const validEnv = {
   REDIS_URL: 'redis://localhost:6379',
   OLLAMA_URL: 'http://localhost:11434',
   ANTHROPIC_API_KEY: 'sk-ant-test',
+  WEB_ORIGIN: 'http://localhost:3000',
   ANTHROPIC_MODEL: 'claude-opus-5-5',
   CHAT_MAX_ITERATIONS: '6',
   CHAT_TOKEN_BUDGET: '200000',

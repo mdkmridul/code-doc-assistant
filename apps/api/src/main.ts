@@ -7,6 +7,9 @@ async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const app = await NestFactory.create(AppModule.forRoot(config));
   app.enableShutdownHooks();
+  // The web app calls the API straight from the browser (no Next.js proxy:
+  // answers can take a minute and uploads can be 50 MB).
+  app.enableCors({ origin: config.WEB_ORIGIN });
   await app.listen(config.API_PORT);
   Logger.log(`API listening on port ${config.API_PORT}`, 'Bootstrap');
 }

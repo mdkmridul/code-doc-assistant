@@ -82,9 +82,16 @@ export interface ModelResponse {
   providerContent: unknown;
 }
 
+export interface CompleteOptions {
+  /** Called with each piece of answer text as the model produces it. */
+  onTextDelta?: (text: string) => void;
+  /** Aborting cancels the request; complete() then rejects. */
+  signal?: AbortSignal;
+}
+
 /** A chat model that can call tools. Implemented in infrastructure (Anthropic). */
 export interface LanguageModel {
   /** The model requested by default, for logging failed calls. */
   readonly modelName: string;
-  complete(request: ModelRequest): Promise<ModelResponse>;
+  complete(request: ModelRequest, options?: CompleteOptions): Promise<ModelResponse>;
 }

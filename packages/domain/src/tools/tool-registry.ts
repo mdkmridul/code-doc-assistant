@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Excerpt } from '../events';
 import type { Citation } from '../ports/chat-store';
 import type { ToolDefinition } from '../ports/language-model';
 import { invokeTool, ToolInputError, type Tool, type ToolContext } from './tool';
@@ -14,10 +15,18 @@ export interface AnyTool {
   readonly inputSchema: z.ZodType;
   execute(input: never, context: ToolContext): Promise<unknown>;
   citations?(output: never): Citation[];
+  summarize?(output: never): string;
+  excerpts?(output: never): Excerpt[];
 }
 
 export type ToolExecution =
-  | { ok: true; output: unknown; citations: Citation[] }
+  | {
+      ok: true;
+      output: unknown;
+      citations: Citation[];
+      summary: string;
+      excerpts: Excerpt[];
+    }
   | { ok: false; error: string };
 
 /**
@@ -60,7 +69,13 @@ export class ToolRegistry {
     }
     try {
       const output = await invokeTool(tool, rawInput, context);
-      return { ok: true, output, citations: tool.citations?.(output) ?? [] };
+      return {
+        ok: true,
+        output,
+        citations: tool.citations?.(output) ?? [],
+        summary: tool.summarize?.(output) ?? 'ok',
+        excerpts: tool.excerpts?.(output) ?? [],
+      };
     } catch (error) {
       if (error instanceof ToolInputError) return { ok: false, error: error.message };
       return {

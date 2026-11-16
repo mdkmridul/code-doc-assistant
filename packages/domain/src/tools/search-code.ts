@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Excerpt } from '../events';
 import type { Citation } from '../ports/chat-store';
 import type { Embedder } from '../ports/embedder';
 import type { RetrievedChunk, Retriever } from '../ports/retriever';
@@ -87,6 +88,21 @@ export class SearchCodeTool implements Tool<SearchCodeInput, SearchCodeOutput> {
     return {
       results: results.map((r) => ({ ...r, score: Math.round(r.score * 1000) / 1000 })),
     };
+  }
+
+  summarize(output: SearchCodeOutput): string {
+    const n = output.results.length;
+    return n === 1 ? '1 result' : `${String(n)} results`;
+  }
+
+  excerpts(output: SearchCodeOutput): Excerpt[] {
+    return output.results.map(({ path, startLine, endLine, snippet }) => ({
+      path,
+      startLine,
+      endLine,
+      text: snippet,
+      source: 'search' as const,
+    }));
   }
 
   citations(output: SearchCodeOutput): Citation[] {

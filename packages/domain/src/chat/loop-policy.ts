@@ -1,3 +1,5 @@
+export type { LoopOutcome } from '../events';
+
 export interface LoopLimits {
   /** Most model calls for one question, including the final answer call. */
   maxIterations: number;
@@ -19,19 +21,6 @@ export interface LoopState {
  * - `stop`: no more calls; the token budget is spent.
  */
 export type NextStep = 'call' | 'final_call' | 'stop';
-
-/** Why answering ended. */
-export type LoopOutcome =
-  /** The model answered without asking for more tools. */
-  | 'completed'
-  /** The iteration cap forced a final answer. */
-  | 'iteration_cap'
-  /** The token budget ran out. */
-  | 'token_budget'
-  /** The model declined to answer. */
-  | 'refused'
-  /** The model ran out of output tokens mid-answer. */
-  | 'truncated';
 
 /**
  * The rules of the agent loop, in one place: how many calls, how many tokens,

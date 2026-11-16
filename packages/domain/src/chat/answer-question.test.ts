@@ -292,8 +292,8 @@ describe('AnswerQuestion', () => {
         role: 'assistant',
         content: answer,
         toolCalls: [
-          { name: 'lookup', input: { key: 'retry' }, isError: false },
-          { name: 'lookup', input: { key: 'unused' }, isError: false },
+          { name: 'lookup', input: { key: 'retry' }, isError: false, summary: 'ok', excerpts: [] },
+          { name: 'lookup', input: { key: 'unused' }, isError: false, summary: 'ok', excerpts: [] },
         ],
         citations: result.citations,
       }),

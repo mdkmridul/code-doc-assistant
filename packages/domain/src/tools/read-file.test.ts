@@ -107,6 +107,23 @@ describe('ReadFileTool', () => {
     expect(reader.reads).toEqual([]);
   });
 
+  it('excerpts the code itself, without the line-number prefixes the model saw', async () => {
+    // Line 2 contains "| " itself: only the leading "N| " prefix may be removed.
+    const { tool } = setup({ 'src/a.ts': 'const a = 1;\n  return a | 2;\n' });
+    const output = await invokeTool(tool, { path: 'src/a.ts' }, context);
+
+    expect(output.content).toBe('1| const a = 1;\n2|   return a | 2;');
+    expect(tool.excerpts(output)).toEqual([
+      {
+        path: 'src/a.ts',
+        startLine: 1,
+        endLine: 2,
+        text: 'const a = 1;\n  return a | 2;',
+        source: 'read',
+      },
+    ]);
+  });
+
   it('cites exactly the lines it returned', async () => {
     const { tool } = setup();
     const output = await invokeTool(tool, { path: 'src/a.ts', startLine: 3, endLine: 5 }, context);

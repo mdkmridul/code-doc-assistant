@@ -1,3 +1,4 @@
+import type { AnswerSummary, ChatStreamEvent } from '../events';
 import type {
   ChatStore,
   Citation,
@@ -31,24 +32,24 @@ const TOKEN_BUDGET_ANSWER =
 
 const REFUSAL_ANSWER = 'I can’t help with that request.';
 
+/** Stored when the client goes away mid-answer, so the transcript stays question/answer pairs. */
+export const CANCELLED_ANSWER =
+  '_This answer was cancelled because the connection closed before it finished._';
+
 export interface AnswerQuestionInput {
   sessionId: string;
   question: string;
 }
 
-export interface AnswerQuestionResult {
-  messageId: string;
-  answer: string;
-  outcome: LoopOutcome;
-  /** Model calls made for this question. */
-  iterations: number;
-  toolCalls: ToolCallTrace[];
-  /** Line references in the answer that overlap code the model actually retrieved. */
-  citations: Citation[];
-  /** Line references in the answer that no retrieved code backs (possible invention). */
-  unverifiedReferences: string[];
-  usage: { inputTokens: number; outputTokens: number; costUsd: number };
+export interface AnswerQuestionOptions {
+  /** Receives `token`, `tool_call`, `tool_result` and finally `done`, in order. */
+  onEvent?: (event: ChatStreamEvent) => void;
+  /** Abort to stop early (e.g. the client disconnected): no further model calls are made. */
+  signal?: AbortSignal;
 }
+
+/** The finished answer; the same shape the stream sends in its `done` event. */
+export type AnswerQuestionResult = AnswerSummary;
 
 export interface AnswerQuestionDeps {
   chats: ChatStore;
@@ -73,7 +74,8 @@ const roundUsd = (usd: number) => Math.round(usd * 1e6) / 1e6;
  * Answers a question about the session's repository with an agent loop:
  * call the model with the tools, run the tool calls it asks for, feed the
  * results back, and repeat until it answers or a LoopPolicy limit is hit.
- * Every model call is logged; the question and the answer are stored.
+ * Every model call is logged; the question and the answer are stored, also
+ * when the caller aborts (then the answer records the cancellation).
  */
 export class AnswerQuestion {
   private readonly clock: { now(): number };
@@ -82,8 +84,12 @@ export class AnswerQuestion {
     this.clock = deps.clock ?? { now: () => Date.now() };
   }
 
-  async execute({ sessionId, question }: AnswerQuestionInput): Promise<AnswerQuestionResult> {
+  async execute(
+    { sessionId, question }: AnswerQuestionInput,
+    { onEvent, signal }: AnswerQuestionOptions = {},
+  ): Promise<AnswerQuestionResult> {
     const { chats, tools, policy, prompt } = this.deps;
+    const emit = (event: ChatStreamEvent) => onEvent?.(event);
 
     const session = await chats.findSession(sessionId);
     if (!session) throw new SessionNotFoundError(sessionId);
@@ -107,6 +113,11 @@ export class AnswerQuestion {
     let outcome: LoopOutcome;
 
     for (;;) {
+      if (signal?.aborted) {
+        outcome = 'cancelled';
+        answer = CANCELLED_ANSWER;
+        break;
+      }
       const step = policy.nextStep(state);
       if (step === 'stop') {
         // The last response asked for tools, so its text is a progress note, not an answer.
@@ -118,13 +129,26 @@ export class AnswerQuestion {
         messages.push({ role: 'system_note', content: ITERATION_CAP_NOTE });
       }
 
-      const response = await this.callModel(sessionId, {
-        system,
-        messages,
-        tools: toolDefinitions,
-        allowToolCalls: step === 'call',
-      });
-      state.iterations += 1;
+      const iteration = state.iterations + 1;
+      let response: ModelResponse;
+      try {
+        response = await this.callModel(
+          sessionId,
+          { system, messages, tools: toolDefinitions, allowToolCalls: step === 'call' },
+          {
+            signal,
+            onTextDelta: (text) => emit({ type: 'token', iteration, text }),
+          },
+        );
+      } catch (error) {
+        // An abort surfaces as whatever error the provider throws; the signal says why.
+        if (!signal?.aborted) throw error;
+        state.iterations = iteration;
+        outcome = 'cancelled';
+        answer = CANCELLED_ANSWER;
+        break;
+      }
+      state.iterations = iteration;
       state.tokensUsed += response.usage.inputTokens + response.usage.outputTokens;
       usage.inputTokens += response.usage.inputTokens;
       usage.outputTokens += response.usage.outputTokens;
@@ -159,7 +183,7 @@ export class AnswerQuestion {
       });
       messages.push({
         role: 'tool_results',
-        results: await this.runTools(response, session.repoId, traces, retrieved),
+        results: await this.runTools(response, iteration, session.repoId, traces, retrieved, emit),
       });
     }
 
@@ -170,7 +194,7 @@ export class AnswerQuestion {
       citations,
     });
 
-    return {
+    const result: AnswerQuestionResult = {
       messageId: stored.id,
       answer,
       outcome,
@@ -180,21 +204,50 @@ export class AnswerQuestion {
       unverifiedReferences,
       usage,
     };
+    emit({ type: 'done', result });
+    return result;
   }
 
-  /** Runs one turn's tool calls in parallel; every call gets exactly one result. */
+  /**
+   * Runs one turn's tool calls in parallel; every call gets exactly one result.
+   * All `tool_call` events go out before the tools start, each `tool_result`
+   * as its tool finishes.
+   */
   private async runTools(
     response: ModelResponse,
+    iteration: number,
     repoId: string,
     traces: ToolCallTrace[],
     retrieved: Citation[],
+    emit: (event: ChatStreamEvent) => void,
   ): Promise<ToolResult[]> {
+    for (const call of response.toolCalls) {
+      emit({ type: 'tool_call', iteration, id: call.id, name: call.name, input: call.input });
+    }
     const executions = await Promise.all(
-      response.toolCalls.map((call) => this.deps.tools.execute(call.name, call.input, { repoId })),
+      response.toolCalls.map(async (call) => {
+        const execution = await this.deps.tools.execute(call.name, call.input, { repoId });
+        emit({
+          type: 'tool_result',
+          iteration,
+          id: call.id,
+          name: call.name,
+          isError: !execution.ok,
+          summary: execution.ok ? execution.summary : execution.error,
+          excerpts: execution.ok ? execution.excerpts : [],
+        });
+        return execution;
+      }),
     );
     return response.toolCalls.map((call, i) => {
       const execution = executions[i];
-      traces.push({ name: call.name, input: call.input, isError: !execution.ok });
+      traces.push({
+        name: call.name,
+        input: call.input,
+        isError: !execution.ok,
+        summary: execution.ok ? execution.summary : execution.error,
+        excerpts: execution.ok ? execution.excerpts : [],
+      });
       if (!execution.ok) {
         return { toolCallId: call.id, content: execution.error, isError: true };
       }
@@ -203,7 +256,7 @@ export class AnswerQuestion {
     });
   }
 
-  /** One model call, logged whether it succeeds or fails. */
+  /** One model call, logged whether it succeeds, fails or is aborted. */
   private async callModel(
     sessionId: string,
     request: {
@@ -212,6 +265,7 @@ export class AnswerQuestion {
       tools: ToolDefinition[];
       allowToolCalls: boolean;
     },
+    options: { signal?: AbortSignal; onTextDelta: (text: string) => void },
   ): Promise<ModelResponse> {
     const { model, llmCalls, prompt } = this.deps;
     const started = this.clock.now();
@@ -222,7 +276,10 @@ export class AnswerQuestion {
     };
     try {
       // A copy: the loop keeps appending to `messages` after this call.
-      const response = await model.complete({ ...request, messages: [...request.messages] });
+      const response = await model.complete(
+        { ...request, messages: [...request.messages] },
+        options,
+      );
       await llmCalls.record({
         ...base,
         model: response.model,
@@ -234,6 +291,7 @@ export class AnswerQuestion {
       });
       return response;
     } catch (error) {
+      // Tokens of a failed or aborted call are not reported by the provider: logged as 0.
       await llmCalls.record({
         ...base,
         model: model.modelName,

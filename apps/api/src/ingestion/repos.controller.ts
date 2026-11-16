@@ -15,8 +15,16 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { GetRepo, RegisterRepo, type RepoView } from '@cda/domain';
+import {
+  GetRepo,
+  isTerminalStatus,
+  RegisterRepo,
+  type RepoProgress,
+  type RepoView,
+} from '@cda/domain';
 import type { Response } from 'express';
+import { openSse } from '../common/sse';
+import { RepoProgressHub } from '../infrastructure/redis/repo-progress';
 import { MAX_UPLOAD_BYTES } from '../infrastructure/workspace/archive';
 import { RepoSourceResolver } from './repo-source-resolver';
 import { SourceErrorFilter } from './source-error.filter';
@@ -35,6 +43,7 @@ export class ReposController {
     private readonly registerRepo: RegisterRepo,
     private readonly getRepo: GetRepo,
     private readonly sources: RepoSourceResolver,
+    private readonly progressHub: RepoProgressHub,
   ) {}
 
   /**
@@ -84,5 +93,43 @@ export class ReposController {
     const repo = await this.getRepo.execute(id);
     if (!repo) throw new NotFoundException(`Repo ${id} not found`);
     return repo;
+  }
+
+  /**
+   * Ingest progress as Server-Sent Events (RepoProgressEvent from
+   * @cda/domain/events): the current state first, then live snapshots from
+   * Redis pub/sub; the stream ends after "ready" or "failed". Closing it never
+   * affects the ingest job.
+   */
+  @Get(':id/events')
+  async events(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    if (!(await this.getRepo.execute(id))) {
+      throw new NotFoundException(`Repo ${id} not found`);
+    }
+
+    const sse = openSse(res);
+    const push = (progress: RepoProgress) => {
+      sse.send({ type: 'progress', progress });
+      if (isTerminalStatus(progress.status)) sse.close();
+    };
+
+    // Subscribe before reading the current state, so no update falls in between.
+    const unsubscribe = await this.progressHub.subscribe(id, push);
+    sse.onClose(() => void unsubscribe());
+    if (sse.closed) return;
+
+    const current = await this.getRepo.execute(id);
+    if (current) {
+      push({
+        repoId: id,
+        status: current.status,
+        fileCount: current.fileCount,
+        chunkCount: current.chunkCount,
+        error: current.error,
+      });
+    }
   }
 }

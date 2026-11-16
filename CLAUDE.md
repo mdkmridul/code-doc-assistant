@@ -14,11 +14,11 @@ Run from the repo root:
 - `npm run lint` / `npm run typecheck` / `npm test` — cover all three workspaces; all must pass before a step is done.
 - `npm run test:integration` — SQL tests (`*.int-spec.ts`) against the Compose Postgres, in a separate `cda_test` database (created and migrated automatically). Needs `docker compose up -d`. Run it whenever retriever or store SQL changes.
 - `docker compose up -d` — starts Postgres (pgvector), Redis and Ollama (local embeddings), and pulls `nomic-embed-text` on first run (`ollama-pull` service), using the values in the root `.env`. On NVIDIA machines, `COMPOSE_FILE` in `.env` adds `docker-compose.gpu.yml` (about 23x faster embeddings); `docker compose exec ollama ollama ps` should show `100% GPU`.
+- `npm run dev -w web` — the web app on http://localhost:3000: ingest, chat and sources on one page. Run the API alongside it.
 - `npm run start:dev -w api` — runs the API; it logs `Connected to Postgres ... (pgvector x.y.z)`, `Connected to Redis` and `Connected to Ollama ... (nomic-embed-text)` on a healthy boot.
 - `npm run db:deploy -w api` — applies migrations. `npm run db:migrate -w api` creates one from `schema.prisma` changes (dev). `npm run db:seed -w api` inserts the sample repo.
 - `POST /repos` with `{"url": "https://github.com/<owner>/<repo>"}` or a multipart `file` (.zip) queues an ingest; `GET /repos/:id` shows its status (`queued → running → ready | failed`) and file/chunk counts.
-- `POST /sessions` `{"repoId"}` opens a Q&A session on a ready repo; `POST /sessions/:id/messages` `{"content"}` runs the agent loop and returns the full answer as JSON (answer, outcome, iterations, toolCalls, citations, usage). Every model call is a row in `llm_calls`.
-- `GET /debug/search?repoId=<uuid>&q=...[&topK=&path=&language=]` — TEMPORARY, non-production only: runs the `search_code` tool. Delete `apps/api/src/search/debug-search.controller.ts` once the chat endpoint calls the tool.
+- `POST /sessions` `{"repoId"}` opens a Q&A session on a ready repo; `POST /sessions/:id/messages` `{"content"}` runs the agent loop and returns the full answer as JSON (answer, outcome, iterations, toolCalls, citations, unverifiedReferences, usage). `GET /sessions/:id` returns the session and its messages. `POST /sessions/:id/messages/stream` is the same as SSE (token, tool_call, tool_result, done, error); `GET /repos/:id/events` streams ingest progress until ready/failed (ADR 0013). Every model call is a row in `llm_calls`.
 - `npm run prisma:generate -w api` — regenerates the client into `apps/api/src/generated/prisma` (gitignored; also runs on `npm install`).
 
 ## Code rules
@@ -72,6 +72,23 @@ Run from the repo root:
 - Every use case gets a unit test with fakes before it is wired to a transport.
 - Build only what the current step asks. No speculative features.
 - Every "chose X over Y" decision gets a one-paragraph ADR in `docs/decisions/` (`NNNN-short-title.md`). The README is assembled from these.
+
+## Streaming
+
+- Wire types for both streams live in `packages/domain/src/events.ts` (`@cda/domain/events`). Keep that file import-free: the web app imports it type-only. Change an event there and both sides must follow.
+- Disconnecting from the answer stream aborts the loop (AbortSignal through `AnswerQuestion` into the SDK stream); the answer is stored as cancelled. Don't make the loop ignore the signal.
+- Ingest progress is best effort (Redis pub/sub, `repo-progress:<repoId>`); Postgres stays the source of truth. One shared subscriber (`RepoProgressHub`) per API process; channels unsubscribe when their last stream closes (`PUBSUB NUMSUB` should drop to 0).
+
+## Web app
+
+- `apps/web` is Next.js 16 with Cache Components; read `apps/web/AGENTS.md` and the bundled docs before changing it.
+- One page (`/`), three zones: ingest, chat, sources (ADR 0014). State is in the URL (`?repo=`, `?session=`). Components: `src/components` (zones), `src/components/ui` (shadcn, owned source: edit freely), `src/lib/turns.ts` (pure conversation model: keep logic here, not in components).
+- Styling: Tailwind 4 via `@tailwindcss/postcss` and shadcn/ui (Radix, Nova preset); `npx shadcn@latest add <component>` from `apps/web`. Check afterwards that it created no `apps/web/package-lock.json`.
+- Tests: `npm test -w web` (Vitest + Testing Library, jsdom). Keep one React version in the tree: two copies make hooks fail with "reading 'useState'" in tests.
+- `npm run typecheck -w web` runs `next typegen` first: route types live in `.next`, and a stale `.next` breaks `tsc` after routes are removed.
+- The browser calls the API directly at `NEXT_PUBLIC_API_URL`; the API allows `WEB_ORIGIN` through CORS. There is no Next.js proxy, so long answers and 50 MB uploads aren't subject to proxy limits.
+- `next.config.ts` loads the root `.env`. `NEXT_PUBLIC_*` values are inlined when `next dev`/`next build` starts, so restart the web app after changing them.
+- URL data (`params`) must be read behind `<Suspense>` (see `app/sessions/[id]/page.tsx`); `npm run build -w web` fails otherwise.
 
 ## Gotchas
 

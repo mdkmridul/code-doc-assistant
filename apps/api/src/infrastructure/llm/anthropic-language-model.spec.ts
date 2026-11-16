@@ -28,19 +28,43 @@ const message = (
     ...overrides,
   }) as unknown as Anthropic.Beta.BetaMessage;
 
+/**
+ * A fake streaming client: replays the reply's text blocks as 'text' deltas
+ * (word by word), then resolves finalMessage() with the reply.
+ */
 function fakeClient(reply: Anthropic.Beta.BetaMessage) {
-  const create = jest.fn((params: CreateParams) => {
-    void params;
-    return Promise.resolve(reply);
-  });
+  const stream = jest.fn(
+    (params: CreateParams, options?: { signal?: AbortSignal | null }) => {
+      void params;
+      const listeners: ((delta: string) => void)[] = [];
+      return {
+        on(event: string, listener: (delta: string) => void) {
+          if (event === 'text') listeners.push(listener);
+          return this;
+        },
+        finalMessage() {
+          if (options?.signal?.aborted) {
+            return Promise.reject(new Error('Request was aborted.'));
+          }
+          for (const block of reply.content) {
+            if (block.type !== 'text') continue;
+            for (const word of block.text.split(/(?<= )/)) {
+              for (const listener of listeners) listener(word);
+            }
+          }
+          return Promise.resolve(reply);
+        },
+      };
+    },
+  );
   const retrieve = jest.fn((id: string) =>
     Promise.resolve({ id, max_input_tokens: 1_000_000 }),
   );
   const client = {
-    beta: { messages: { create } },
+    beta: { messages: { stream } },
     models: { retrieve },
   } as unknown as AnthropicClient;
-  return { client, create, retrieve };
+  return { client, stream, retrieve };
 }
 
 const request: ModelRequest = {
@@ -91,13 +115,13 @@ const request: ModelRequest = {
 
 describe('AnthropicLanguageModel', () => {
   it('sends the conversation in Messages API form', async () => {
-    const { client, create } = fakeClient(message({}));
+    const { client, stream } = fakeClient(message({}));
 
     await new AnthropicLanguageModel(client, {
       model: 'claude-opus-5-5',
     }).complete(request);
 
-    const params = create.mock.calls[0][0];
+    const params = stream.mock.calls[0][0];
     expect(params).toMatchObject({
       model: 'claude-opus-5-5',
       system: 'You document ky.',
@@ -152,7 +176,7 @@ describe('AnthropicLanguageModel', () => {
   });
 
   it('disables tool calls with tool_choice none, keeping the tools declared', async () => {
-    const { client, create } = fakeClient(message({}));
+    const { client, stream } = fakeClient(message({}));
 
     await new AnthropicLanguageModel(client, {
       model: 'claude-opus-5-5',
@@ -161,7 +185,7 @@ describe('AnthropicLanguageModel', () => {
       allowToolCalls: false,
     });
 
-    const params = create.mock.calls[0][0];
+    const params = stream.mock.calls[0][0];
     expect(params.tool_choice).toEqual({ type: 'none' });
     expect(params.tools).toHaveLength(1);
   });
@@ -274,6 +298,41 @@ describe('AnthropicLanguageModel', () => {
       (1_000 * 4 + 100 * 20) / 1e6 + (2_000 * 5 + 200 * 25) / 1e6,
       10,
     );
+  });
+
+  it('streams answer text through onTextDelta as it arrives', async () => {
+    const content = [
+      { type: 'text', text: 'Retries are configured in retry.ts.' },
+    ] as unknown as Anthropic.Beta.BetaContentBlock[];
+    const { client } = fakeClient(message({ content }));
+    const deltas: string[] = [];
+
+    const response = await new AnthropicLanguageModel(client, {
+      model: 'claude-opus-5-5',
+    }).complete(request, { onTextDelta: (d) => deltas.push(d) });
+
+    expect(deltas).toEqual([
+      'Retries ',
+      'are ',
+      'configured ',
+      'in ',
+      'retry.ts.',
+    ]);
+    expect(response.text).toBe('Retries are configured in retry.ts.');
+  });
+
+  it('passes the abort signal to the request and rejects once aborted', async () => {
+    const { client, stream } = fakeClient(message({}));
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      new AnthropicLanguageModel(client, { model: 'claude-opus-5-5' }).complete(
+        request,
+        { signal: controller.signal },
+      ),
+    ).rejects.toThrow('aborted');
+    expect(stream.mock.calls[0][1]).toEqual({ signal: controller.signal });
   });
 
   describe('onModuleInit', () => {

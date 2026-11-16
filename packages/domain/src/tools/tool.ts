@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { Excerpt } from '../events';
 import type { Citation } from '../ports/chat-store';
 
 /** Facts a tool gets from the conversation, never from the model's arguments. */
@@ -21,6 +22,10 @@ export interface Tool<TInput, TOutput> {
   execute(input: TInput, context: ToolContext): Promise<TOutput>;
   /** Source locations in the output an answer may cite. Omit for tools that return none. */
   citations?(output: TOutput): Citation[];
+  /** One line describing a result for people watching the stream, e.g. "8 results". */
+  summarize?(output: TOutput): string;
+  /** The code the output shows, for a sources panel. */
+  excerpts?(output: TOutput): Excerpt[];
 }
 
 /** The model (or a caller) sent arguments that do not match the tool's schema. */
