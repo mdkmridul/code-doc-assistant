@@ -175,6 +175,34 @@ describe('AnthropicLanguageModel', () => {
     ]);
   });
 
+  it('sends a note that follows an assistant turn as a user turn (the API rejects a system message there)', async () => {
+    const { client, stream } = fakeClient(message({}));
+
+    await new AnthropicLanguageModel(client, {
+      model: 'claude-opus-5-5',
+    }).complete({
+      ...request,
+      messages: [
+        { role: 'user', content: 'How are retries done?' },
+        {
+          role: 'assistant',
+          text: 'Retries live in retry.ts.',
+          toolCalls: [],
+          providerContent: [
+            { type: 'text', text: 'Retries live in retry.ts.' },
+          ],
+        },
+        { role: 'system_note', content: 'Rewrite it with a citations block.' },
+      ],
+      allowToolCalls: false,
+    });
+
+    expect(stream.mock.calls[0][0].messages.at(-1)).toEqual({
+      role: 'user',
+      content: 'Rewrite it with a citations block.',
+    });
+  });
+
   it('disables tool calls with tool_choice none, keeping the tools declared', async () => {
     const { client, stream } = fakeClient(message({}));
 

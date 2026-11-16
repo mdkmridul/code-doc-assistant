@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CitableSource } from '../tools/tool';
 import { parseFinalAnswer, validateCitations, type AnswerMeta } from './final-answer';
+import { rewriteNote } from './answer-question';
 
 const block = (meta: unknown) => `<citations>${JSON.stringify(meta)}</citations>`;
 
@@ -87,5 +88,18 @@ describe('validateCitations', () => {
 
   it('deduplicates repeated citations', () => {
     expect(validateCitations(meta([{ sourceId: 'c1' }, { sourceId: 'c1', lines: [10, 40] }]), sources).citations).toHaveLength(1);
+  });
+});
+
+describe('rewriteNote', () => {
+  it('spells out a block that parses, so a rewrite can follow it exactly', () => {
+    const note = rewriteNote('the answer does not end with a <citations> block');
+    const example = /<citations>.*<\/citations>/.exec(note)?.[0] ?? '';
+    const filled = example.replace('<sourceId>', 'c1').replace('<start>', '1').replace('<end>', '2');
+    expect(parseFinalAnswer(`Answer.\n${filled}`)).toMatchObject({
+      ok: true,
+      meta: { found: true, citations: [{ sourceId: 'c1', lines: [1, 2] }] },
+    });
+    expect(note).toContain('{"found": false, "citations": []}');
   });
 });

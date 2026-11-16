@@ -17,7 +17,12 @@ import type { RetrievalMode } from '../ports/retriever';
 import type { CitableSource, ToolContext } from '../tools/tool';
 import type { ToolExecution, ToolRegistry } from '../tools/tool-registry';
 import { resolveCitations } from './citations';
-import { CITATIONS_OPEN, parseFinalAnswer, validateCitations } from './final-answer';
+import {
+  CITATIONS_CLOSE,
+  CITATIONS_OPEN,
+  parseFinalAnswer,
+  validateCitations,
+} from './final-answer';
 import { ContextBudget, type Admission, type ContextBudgetLimits } from './context-budget';
 import { SessionNotFoundError, UnknownPromptVersionError } from './errors';
 import type { LoopOutcome, LoopPolicy, LoopState } from './loop-policy';
@@ -50,12 +55,22 @@ export const NOT_FOUND_ANSWER =
   'If you expected it to be here, try naming a file, function or feature, or ask about ' +
   'another part of the codebase.';
 
-/** Sent before the one rewrite a final answer gets when its citations don't check out. */
+/** The block's exact shape, spelled out for the rewrite (a prompt may not show it). */
+const CITATIONS_EXAMPLE =
+  `${CITATIONS_OPEN}{"found": true, "citations": [{"sourceId": "<sourceId>", "lines": [<start>, <end>]}]}${CITATIONS_CLOSE}`;
+
+/**
+ * Sent before the one rewrite a final answer gets when its citations don't
+ * check out. It spells out the block's exact JSON shape: without it, a model
+ * on a prompt that doesn't show the format (e.g. v3) writes a block like
+ * {"sourceIds": [...]}, which the strict schema rightly rejects (ADR 0019).
+ */
 export const rewriteNote = (problem: string): string =>
-  `Your answer can't be accepted: ${problem}. Rewrite it now, without tools. Give the answer ` +
-  `text, then end with the ${CITATIONS_OPEN} block, citing the sourceIds of tool results from ` +
-  'this question that support it. If the repository does not contain the answer, set ' +
-  '"found": false instead.';
+  `Your answer can't be accepted: ${problem}. Rewrite it now, without tools: give the answer ` +
+  `text, then end with exactly this block and nothing after it:\n${CITATIONS_EXAMPLE}\n` +
+  'Each citation names the sourceId of a tool result from this question that supports the ' +
+  'answer, copied exactly; "lines" is optional and must lie within that result. If the ' +
+  'repository does not contain the answer, write {"found": false, "citations": []} instead.';
 
 type AnswerCheck =
   | { kind: 'ok'; text: string; citations: Citation[]; rejected: string[] }

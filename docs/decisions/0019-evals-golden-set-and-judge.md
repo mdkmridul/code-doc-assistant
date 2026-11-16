@@ -16,8 +16,16 @@
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | v4 / hybrid | 28.6% | 51.8% | 50.0% | 91.1% | 3.79 | 75.0% | 4.79 | 87.5% | $3.26 |
 | v4 / vector | 26.8% | 44.6% | 33.3% | 94.6% | 3.96 | 85.7% | 4.93 | 87.5% | $2.97 |
+| v3 / hybrid | 28.6% | 51.8% | 50.0% | 94.6% | 3.89 | 82.1% | 4.82 | 75.0% | $4.56 |
+
+Model calls per question: 3.7 for both v4 runs and 4.9 for v3. No question errored in any run.
 
 - **Hybrid retrieval does what ADR 0018 claims at the retrieval level** (identifier recall@5 up from 33% to 50%), **but that does not yet carry over to answers.** The agent searches several times and reads files, so it reaches the expected file in 91–95% of questions either way. The answer-level differences are a question or two out of 28, within noise.
 - **Faithfulness is the weak spot, and it is real.** Every low score is an answer quoting code beyond what the assistant saw: search snippets are cut at 600 characters, yet the answer "quotes" the rest of the class, most likely from the model's prior knowledge of ky. This is also a gap in ADR 0017's citation check, which accepts lines anywhere in a search hit's *chunk* although the model only saw the snippet. The next steps to measure with this eval: validate search-hit citations against the snippet's lines, and steer the model to `read_file` before quoting.
-- **Refusals:** 7 of 8 not-found questions got the not-found answer. The eighth, "XML response parsing", was answered correctly ("ky has no XML shortcut", citing the list of shortcuts). That is a grounded negative answer, so the question should be reworded or turned into an answerable one.
-- **The v3 run (to test ADR 0017's v4 claims) is still missing.** The first attempt was stopped when the machine ran out of memory. `uv --directory evals run cda-eval answers --prompt v3 --mode hybrid` completes the matrix.
+- **v4 against v3 (ADR 0017's claims).**
+  - **Refusals:** v4 declines more not-found questions (87.5% against 75%), as ADR 0017 expected. Both versions decline all 4 off-topic questions. Every miss, in either version, is a *grounded negative* ("ky has no XML shortcut" or "no cookie jar", citing the code), not an invented feature. v4 just declines those more firmly. The XML question should be reworded or made answerable.
+  - **Cost:** v4 also costs less, 28% under v3 (3.7 against 4.9 model calls per question). v3 never writes the citation block, so every v3 answer needs the one rewrite.
+  - **Faithfulness and correctness are the same within noise**, as expected: v4 changes the answer contract, not how the model researches.
+- **The comparison run found two bugs in ADR 0017's rewrite step, now fixed.** Neither showed in the v4 runs, which never needed a rewrite, nor in unit tests, whose fake model doesn't enforce the API's rules.
+  - **Rejected note.** The rewrite note was sent as a mid-conversation `system` message right after the assistant's text, which the API rejects with a 400. Every v3 question failed this way. The adapter now sends such a note as a user turn (a note after tool results stays a system message).
+  - **Format not shown.** The note didn't spell out the block's JSON, so v3 wrote `{"sourceIds": [...]}`, the strict schema rejected it, and every answer, answerable ones included, became "not found". The note now shows the exact block, and a test checks that its example parses.

@@ -90,7 +90,9 @@ export class AnthropicLanguageModel implements LanguageModel, OnModuleInit {
         model: this.modelName,
         max_tokens: this.maxTokens,
         system: request.system,
-        messages: request.messages.map(toMessageParam),
+        messages: request.messages.map((message, i, all) =>
+          toMessageParam(message, i, all),
+        ),
         tools: request.tools.map(toToolParam),
         tool_choice: request.allowToolCalls
           ? { type: 'auto' }
@@ -181,6 +183,8 @@ function toToolParam(tool: ToolDefinition): Anthropic.Beta.BetaTool {
 
 function toMessageParam(
   message: ConversationMessage,
+  index: number,
+  all: readonly ConversationMessage[],
 ): Anthropic.Beta.BetaMessageParam {
   switch (message.role) {
     case 'user':
@@ -205,7 +209,15 @@ function toMessageParam(
           is_error: result.isError,
         })),
       };
-    case 'system_note':
-      return { role: 'system', content: message.content };
+    case 'system_note': {
+      // A mid-conversation system message must follow a user turn (tool
+      // results count). After the assistant's own text (e.g. the note asking
+      // for a rewrite of a final answer) the API rejects it with a 400, so
+      // the note goes as a user turn there instead.
+      const previous = all[index - 1]?.role;
+      return previous === 'user' || previous === 'tool_results'
+        ? { role: 'system', content: message.content }
+        : { role: 'user', content: message.content };
+    }
   }
 }
