@@ -14,6 +14,7 @@ Run from the repo root:
 - `npm run lint` / `npm run typecheck` / `npm test` — cover all three workspaces; all must pass before a step is done.
 - `npm run test:integration` — SQL tests (`*.int-spec.ts`) against the Compose Postgres, in a separate `cda_test` database (created and migrated automatically). Needs `docker compose up -d`. Run it whenever retriever or store SQL changes.
 - `docker compose up -d` — starts Postgres (pgvector), Redis and Ollama (local embeddings), and pulls `nomic-embed-text` on first run (`ollama-pull` service), using the values in the root `.env`. On NVIDIA machines, `COMPOSE_FILE` in `.env` adds `docker-compose.gpu.yml` (about 23x faster embeddings); `docker compose exec ollama ollama ps` should show `100% GPU`.
+- `docker compose --profile app up -d --build` — the whole stack in containers (ADR 0015): the infrastructure plus a one-shot `migrate` service, the API (:API_PORT) and the web app (:3000). Compose overrides the database, Redis and Ollama URLs with service names; `NEXT_PUBLIC_API_URL` is baked into the web image, so rebuild after changing it. Stop it with `docker compose --profile app down` (without the profile, `down` leaves the app containers running). Use the host commands below for development; don't run both at once (ports 3000/3001).
 - `npm run dev -w web` — the web app on http://localhost:3000: ingest, chat and sources on one page. Run the API alongside it.
 - `npm run start:dev -w api` — runs the API; it logs `Connected to Postgres ... (pgvector x.y.z)`, `Connected to Redis` and `Connected to Ollama ... (nomic-embed-text)` on a healthy boot.
 - `npm run db:deploy -w api` — applies migrations. `npm run db:migrate -w api` creates one from `schema.prisma` changes (dev). `npm run db:seed -w api` inserts the sample repo.
@@ -30,7 +31,7 @@ Run from the repo root:
 ## Environment variables
 
 - The root `.env` (gitignored) is read by both docker compose and the API. `.env.example` is the committed template.
-- Adding, renaming or removing a variable means updating **all** of these in the same change: the Zod schema in `apps/api/src/config/env.schema.ts`, `.env.example` (with a comment saying who reads it), `docker-compose.yml` if compose uses it, and `apps/api/src/config/load-config.spec.ts` (its `validEnv`).
+- Adding, renaming or removing a variable means updating **all** of these in the same change: the Zod schema in `apps/api/src/config/env.schema.ts`, `.env.example` (with a comment saying who reads it), `docker-compose.yml` if compose uses it (the `api` service gets every API variable through `env_file`; URLs that point at other services are overridden there), and `apps/api/src/config/load-config.spec.ts` (its `validEnv`).
 - Every API variable is required with no default, so a missing value stops the boot.
 
 ## Database (Prisma)

@@ -19,6 +19,11 @@ if (!process.env.NEXT_PUBLIC_API_URL) {
 const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
+  // The Docker image runs the traced server (.next/standalone/apps/web/server.js).
+  // Trace from the repo root so the workspace's hoisted node_modules are included.
+  // Next runs with cwd at apps/web (`npm -w web`, and in the image).
+  output: "standalone",
+  outputFileTracingRoot: resolve(process.cwd(), "../.."),
 };
 
 export default nextConfig;

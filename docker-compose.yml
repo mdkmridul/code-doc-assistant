@@ -58,6 +58,69 @@ services:
     entrypoint: ['ollama', 'pull', 'nomic-embed-text']
     restart: 'no'
 
+  # ---------------------------------------------------------------------------
+  # The app itself, in containers (ADR 0015). Only with the `app` profile:
+  #   docker compose --profile app up -d --build
+  # Without it, compose starts the infrastructure above and the API and web app
+  # run on the host (npm run start:dev -w api / npm run dev -w web).
+  # Inside the compose network the API reaches its dependencies by service
+  # name, so the host-oriented URLs in .env are overridden here.
+  # ---------------------------------------------------------------------------
+
+  # One-shot: applies pending Prisma migrations, then exits. The API waits for it.
+  migrate:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: build
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    working_dir: /app/apps/api
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    # ANTHROPIC_API_KEY, chat limits, WEB_ORIGIN and API_PORT come from .env.
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+      OLLAMA_URL: http://ollama:11434
+    ports:
+      - '${API_PORT:?set API_PORT in .env}:${API_PORT}'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+
+  web:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # Baked into the browser bundle: rebuild the image after changing it.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?set NEXT_PUBLIC_API_URL in .env}
+    restart: unless-stopped
+    # The browser's origin; must match WEB_ORIGIN in .env (the API's CORS rule).
+    ports:
+      - '3000:3000'
+    depends_on:
+      - api
+
 volumes:
   postgres-data:
   redis-data:
