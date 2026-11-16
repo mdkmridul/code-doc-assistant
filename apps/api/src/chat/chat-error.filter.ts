@@ -1,6 +1,7 @@
 import {
   ArgumentsHost,
   BadGatewayException,
+  BadRequestException,
   Catch,
   ConflictException,
   ExceptionFilter,
@@ -13,6 +14,8 @@ import {
   RepoNotFoundError,
   RepoNotReadyError,
   SessionNotFoundError,
+  ToolInputError,
+  UnknownPromptVersionError,
 } from '@cda/domain';
 
 /**
@@ -23,6 +26,8 @@ import {
   SessionNotFoundError,
   RepoNotFoundError,
   RepoNotReadyError,
+  UnknownPromptVersionError,
+  ToolInputError,
   Anthropic.APIError,
 )
 export class ChatErrorFilter
@@ -39,6 +44,12 @@ export class ChatErrorFilter
       error instanceof RepoNotFoundError
     ) {
       return new NotFoundException(error.message);
+    }
+    if (
+      error instanceof UnknownPromptVersionError ||
+      error instanceof ToolInputError
+    ) {
+      return new BadRequestException(error.message);
     }
     if (error instanceof RepoNotReadyError) {
       return new ConflictException(error.message);

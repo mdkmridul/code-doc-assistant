@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import type { Excerpt } from '../events';
 import type { Citation } from '../ports/chat-store';
+import type { RetrievalMode } from '../ports/retriever';
 
 /**
  * A location a final answer may cite: the code a tool showed the model, with
@@ -14,6 +15,8 @@ export interface CitableSource extends Citation {
 export interface ToolContext {
   /** The repository the conversation is about. */
   repoId: string;
+  /** Retrieval mode for search tools; their default when absent. Set per question (e.g. by evals). */
+  retrievalMode?: RetrievalMode;
 }
 
 /**

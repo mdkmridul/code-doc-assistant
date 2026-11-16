@@ -24,7 +24,7 @@ describe('ToolRegistry', () => {
 
     expect(definitions.map((d) => d.name)).toEqual(['lookup', 'search_code']);
     const search = definitions[1];
-    expect(search.description).toMatch(/Semantic search/);
+    expect(search.description).toMatch(/by meaning and by exact words/);
     expect(search.inputSchema).toMatchObject({
       type: 'object',
       additionalProperties: false,

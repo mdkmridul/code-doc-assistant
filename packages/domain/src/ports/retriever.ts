@@ -1,7 +1,18 @@
+/**
+ * How chunks are matched: `vector` ranks by embedding similarity alone;
+ * `hybrid` also runs a full-text search on the query's words and fuses both
+ * rankings (ADR 0018).
+ */
+export const RETRIEVAL_MODES = ['vector', 'hybrid'] as const;
+export type RetrievalMode = (typeof RETRIEVAL_MODES)[number];
+
 export interface RetrievalQuery {
   repoId: string;
   /** Query vector from the same model (and query mode) the chunks were embedded with. */
   embedding: readonly number[];
+  /** The query as text, for the full-text half of hybrid retrieval. */
+  text: string;
+  mode: RetrievalMode;
   /** How many chunks to return at most. */
   topK: number;
   /** Only chunks whose file path starts with this repo-relative POSIX prefix. */
@@ -20,7 +31,7 @@ export interface RetrievedChunk {
   endLine: number;
   symbol: string | null;
   snippet: string;
-  /** Cosine similarity, higher is closer (1 = same direction). */
+  /** Relevance from 0 to 1, higher is better: cosine similarity (vector), or the fused rank score (hybrid). */
   score: number;
 }
 

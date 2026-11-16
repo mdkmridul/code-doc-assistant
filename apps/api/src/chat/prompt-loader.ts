@@ -35,3 +35,24 @@ export function loadPrompt(
   }
   return new SystemPrompt(name, version, readFileSync(file, 'utf8').trim());
 }
+
+/**
+ * Every version of a prompt that has a changelog entry and a file, e.g. for
+ * evals that compare versions (AnswerQuestion's otherPrompts). Each one is
+ * loaded with loadPrompt, so the same boot-time checks apply.
+ */
+export function loadPromptVersions(
+  name: string,
+  roots: readonly string[] = [process.cwd(), resolve(process.cwd(), '../..')],
+): SystemPrompt[] {
+  const changelog = roots
+    .map((root) => resolve(root, 'prompts', name, 'CHANGELOG.md'))
+    .find((path) => existsSync(path));
+  if (!changelog) return [];
+  const versions = [
+    ...readFileSync(changelog, 'utf8').matchAll(/^## (v\d+)\s*$/gm),
+  ].map((match) => match[1]);
+  return versions
+    .filter((version) => existsSync(join(dirname(changelog), `${version}.md`)))
+    .map((version) => loadPrompt(name, version, roots));
+}

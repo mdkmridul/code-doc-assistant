@@ -6,7 +6,11 @@
 import type { RetrievalQuery } from '@cda/domain';
 import { testPrismaClient } from '../../../test/int-database';
 import { Prisma, type PrismaClient } from '../../generated/prisma/client';
-import { PgvectorRetriever, searchChunksSql } from './pgvector-retriever';
+import {
+  hybridSearchSql,
+  PgvectorRetriever,
+  searchChunksSql,
+} from './pgvector-retriever';
 
 const DIMENSIONS = 768;
 const KEY_PREFIX = 'int-test:pgvector-retriever:';
@@ -140,6 +144,8 @@ const query = (
   overrides: Partial<RetrievalQuery> & Pick<RetrievalQuery, 'repoId'>,
 ): RetrievalQuery => ({
   embedding: q,
+  text: '',
+  mode: 'vector',
   topK: 10,
   snippetChars: 600,
   ...overrides,
@@ -299,5 +305,119 @@ describe('PgvectorRetriever (Postgres)', () => {
 
     expect(plain.length).toBeLessThan(3);
     expect(results.map((r) => r.chunkId)).toEqual(targets);
+  });
+
+  describe('hybrid mode', () => {
+    /** One identifier chunk far from the query vector, among decoys close to it. */
+    async function identifierAmongDecoys(
+      repoId: string,
+    ): Promise<{ wanted: string; decoys: string[] }> {
+      const fileId = await createFile(repoId, 'source/retry.ts');
+      const decoys = await createChunks(
+        fileId,
+        [0.9, 0.85, 0.8, 0.75, 0.7].map((cosine, i) => ({
+          content: `generic request handling ${String(i)}`,
+          embedding: withCosine(q, cosine),
+        })),
+      );
+      const [wanted] = await createChunks(fileId, [
+        {
+          content: 'export const afterStatusCodes = [413, 429, 503];',
+          symbol: 'afterStatusCodes',
+          embedding: withCosine(q, 0.1),
+        },
+      ]);
+      return { wanted, decoys };
+    }
+
+    it('ranks an exact identifier match that the vector ranking alone misses', async () => {
+      const repoId = await createRepo('hybrid-identifier');
+      const { wanted, decoys } = await identifierAmongDecoys(repoId);
+      const text = 'Which status codes does afterStatusCodes list?';
+
+      const vectorOnly = await retriever.retrieve(
+        query({ repoId, topK: 3, text, mode: 'vector' }),
+      );
+      const hybrid = await retriever.retrieve(
+        query({ repoId, topK: 3, text, mode: 'hybrid' }),
+      );
+
+      expect(vectorOnly.map((r) => r.chunkId)).toEqual(decoys.slice(0, 3));
+      expect(hybrid[0].chunkId).toBe(wanted);
+      expect(hybrid.map((r) => r.chunkId).slice(1)).toEqual(decoys.slice(0, 2));
+      // Fused scores are scaled to 0-1 and sorted best first.
+      for (const r of hybrid) {
+        expect(r.score).toBeGreaterThan(0);
+        expect(r.score).toBeLessThanOrEqual(1);
+      }
+      expect(hybrid.map((r) => r.score)).toEqual(
+        [...hybrid.map((r) => r.score)].sort((a, b) => b - a),
+      );
+    });
+
+    it('keeps the repo, path and language filters on the text half', async () => {
+      const repoId = await createRepo('hybrid-filters');
+      const other = await createRepo('hybrid-filters-other');
+      await identifierAmongDecoys(other);
+      const docs = await createFile(repoId, 'docs/readme.md', 'markdown');
+      await createChunks(docs, [
+        {
+          content: 'afterStatusCodes is documented here',
+          embedding: withCosine(q, 0.2),
+        },
+      ]);
+      const [code] = await createChunks(
+        await createFile(repoId, 'source/a.ts'),
+        [
+          {
+            content: 'const x = afterStatusCodes;',
+            embedding: withCosine(q, 0.2),
+          },
+        ],
+      );
+
+      const results = await retriever.retrieve(
+        query({
+          repoId,
+          text: 'afterStatusCodes',
+          mode: 'hybrid',
+          pathPrefix: 'source/',
+          language: 'typescript',
+        }),
+      );
+
+      expect(results.map((r) => r.chunkId)).toEqual([code]);
+    });
+
+    it('falls back to vector search when the question has no searchable words', async () => {
+      const repoId = await createRepo('hybrid-fallback');
+      await identifierAmongDecoys(repoId);
+      const text = 'How does it work?';
+
+      const vectorOnly = await retriever.retrieve(
+        query({ repoId, topK: 3, text, mode: 'vector' }),
+      );
+      const hybrid = await retriever.retrieve(
+        query({ repoId, topK: 3, text, mode: 'hybrid' }),
+      );
+
+      expect(hybrid).toEqual(vectorOnly);
+    });
+
+    // Only the vector half's plan is stable on a tiny test table; the text half
+    // and the final lookup are planner choices (see ADR 0018 for the real plan).
+    it('keeps the HNSW index for the vector half', async () => {
+      const repoId = await createRepo('hybrid-plan');
+      await identifierAmongDecoys(repoId);
+
+      const plan = await prisma.$queryRaw<{ 'QUERY PLAN': string }[]>(
+        Prisma.sql`EXPLAIN ${hybridSearchSql(query({ repoId, mode: 'hybrid' }), 'afterstatuscodes')}`,
+      );
+      const text = plan
+        .map((row) => row['QUERY PLAN'])
+        .join(String.fromCharCode(10));
+
+      expect(text).toContain('chunks_embedding_hnsw_idx');
+    });
   });
 });

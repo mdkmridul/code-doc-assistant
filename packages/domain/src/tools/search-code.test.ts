@@ -42,6 +42,17 @@ describe('SearchCodeTool', () => {
     }
   });
 
+  it('searches in the retrieval mode the context sets, else the tool default', async () => {
+    const { tool, retriever } = setup();
+    await invokeTool(tool, { query: 'q' }, { repoId: 'r', retrievalMode: 'vector' });
+    await invokeTool(tool, { query: 'q' }, { repoId: 'r' });
+    expect(retriever.queries.map((q) => q.mode)).toEqual(['vector', 'hybrid']);
+
+    const vectorByDefault = new SearchCodeTool(new FakeEmbedder(3), retriever, 'vector');
+    await invokeTool(vectorByDefault, { query: 'q' }, { repoId: 'r' });
+    expect(retriever.queries.at(-1)?.mode).toBe('vector');
+  });
+
   it('embeds the query once and searches the context repo with defaults', async () => {
     const { tool, embedder, retriever } = setup();
 
@@ -52,6 +63,8 @@ describe('SearchCodeTool', () => {
       {
         repoId: 'repo-1',
         embedding: [25, 1, 1], // FakeEmbedder: [text length, 1, 1]
+        text: 'how are requests retried?',
+        mode: 'hybrid',
         topK: 8,
         pathPrefix: undefined,
         language: undefined,

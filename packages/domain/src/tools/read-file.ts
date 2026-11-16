@@ -18,9 +18,6 @@ export const READ_FILE_MAX_CHARS = 16_000;
 /** Appended to a single line longer than the whole cap (minified code). */
 const LINE_CUT_NOTE = ' … [line truncated]';
 
-/** Excerpts are stored with each answer; this keeps one message from growing large. */
-const EXCERPT_MAX_CHARS = 8_000;
-
 export const readFileInputSchema = z
   .object({
     path: z
@@ -148,14 +145,15 @@ export class ReadFileTool implements Tool<ReadFileInput, ReadFileOutput> {
   }
 
   excerpts(output: ReadFileOutput): Excerpt[] {
-    // The model saw numbered lines; the panel shows the code itself.
+    // The model saw numbered lines; the panel (and eval judges) get the code itself,
+    // all of it: READ_FILE_MAX_CHARS already bounds its size.
     const text = output.content.replace(/^\d+\| /gm, '');
     return [
       {
         path: output.path,
         startLine: output.startLine,
         endLine: output.endLine,
-        text: text.length > EXCERPT_MAX_CHARS ? text.slice(0, EXCERPT_MAX_CHARS) : text,
+        text,
         source: 'read',
       },
     ];

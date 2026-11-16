@@ -14,7 +14,7 @@ import type {
   ToolCall,
 } from '../ports/language-model';
 import type { LlmCallLog, LlmCallRecord } from '../ports/llm-call-log';
-import type { CitableSource, Tool } from '../tools/tool';
+import type { CitableSource, Tool, ToolContext } from '../tools/tool';
 
 /** A scripted step that never finishes on its own: it rejects only when aborted. */
 export const HANG = 'hang' as const;
@@ -98,10 +98,14 @@ export class LookupTool implements Tool<{ key: string }, LookupOutput> {
   readonly name = 'lookup';
   readonly description = 'Looks a key up.';
   readonly inputSchema = z.object({ key: z.string().min(1).describe('The key') }).strict();
-  readonly calls: { key: string; repoId: string }[] = [];
+  readonly calls: { key: string; repoId: string; retrievalMode?: string }[] = [];
 
-  execute(input: { key: string }, context: { repoId: string }) {
-    this.calls.push({ key: input.key, repoId: context.repoId });
+  execute(input: { key: string }, context: ToolContext) {
+    this.calls.push({
+      key: input.key,
+      repoId: context.repoId,
+      ...(context.retrievalMode && { retrievalMode: context.retrievalMode }),
+    });
     if (input.key === 'explode') return Promise.reject(new Error('backend down'));
     const big = /^big-(\d+)$/.exec(input.key);
     const value = big ? 'v'.repeat(Number(big[1]) * 3) : `value-of-${input.key}`;

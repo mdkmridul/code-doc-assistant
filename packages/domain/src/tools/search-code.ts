@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Excerpt } from '../events';
 import type { Embedder } from '../ports/embedder';
-import type { RetrievedChunk, Retriever } from '../ports/retriever';
+import type { RetrievalMode, RetrievedChunk, Retriever } from '../ports/retriever';
 import type { CitableSource, Tool, ToolContext } from './tool';
 
 /** Long enough to recognise the code, short enough that 8–20 hits stay cheap. */
@@ -60,9 +60,9 @@ export function normalizePathPrefix(prefix: string): string {
 export class SearchCodeTool implements Tool<SearchCodeInput, SearchCodeOutput> {
   readonly name = 'search_code';
   readonly description =
-    'Semantic search over the current repository. Returns the code chunks closest in ' +
-    'meaning to the query, best first, each with path, line range, symbol, a snippet and a ' +
-    'similarity score (0-1), and a sourceId to cite it by. Use it to find where something is implemented, configured or ' +
+    'Search over the current repository, by meaning and by exact words such as identifiers. ' +
+    'Returns the best matching code chunks first, each with path, line range, symbol, a snippet, ' +
+    'a relevance score (0-1) and a sourceId to cite it by. Use it to find where something is implemented, configured or ' +
     'documented. Narrow with pathPrefix or language when you know where to look.';
   readonly inputSchema = searchCodeInputSchema;
 
@@ -70,6 +70,8 @@ export class SearchCodeTool implements Tool<SearchCodeInput, SearchCodeOutput> {
     /** Must embed in query mode, with the same model used to index chunks. */
     private readonly queryEmbedder: Embedder,
     private readonly retriever: Retriever,
+    /** Used unless the context sets a retrieval mode. */
+    private readonly defaultMode: RetrievalMode = 'hybrid',
   ) {}
 
   async execute(input: SearchCodeInput, context: ToolContext): Promise<SearchCodeOutput> {
@@ -80,6 +82,8 @@ export class SearchCodeTool implements Tool<SearchCodeInput, SearchCodeOutput> {
     const results = await this.retriever.retrieve({
       repoId: context.repoId,
       embedding,
+      text: input.query,
+      mode: context.retrievalMode ?? this.defaultMode,
       topK: input.topK,
       // An empty prefix after normalisation ("./") means the whole repo.
       pathPrefix: pathPrefix === '' ? undefined : pathPrefix,

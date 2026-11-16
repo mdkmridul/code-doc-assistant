@@ -8,7 +8,7 @@ import {
   NOT_FOUND_ANSWER,
   rewriteNote,
 } from './answer-question';
-import { SessionNotFoundError } from './errors';
+import { SessionNotFoundError, UnknownPromptVersionError } from './errors';
 import {
   call,
   FakeChatStore,
@@ -521,6 +521,69 @@ describe('AnswerQuestion', () => {
 
     expect(result.outcome).toBe('truncated');
     expect(lookup.calls).toEqual([]);
+  });
+
+  describe('per-question options', () => {
+    const build = async (script: Partial<ModelResponse>[]) => {
+      const chats = new FakeChatStore();
+      const { id: sessionId } = await chats.createSession('repo-1');
+      const model = new FakeLanguageModel(script);
+      const lookup = new LookupTool();
+      const llmCalls = new FakeLlmCallLog();
+      const useCase = new AnswerQuestion({
+        chats,
+        model,
+        tools: new ToolRegistry([lookup]),
+        llmCalls,
+        prompt: new SystemPrompt('answer-question', 'v7', 'Current prompt for {{repository}}.'),
+        otherPrompts: [new SystemPrompt('answer-question', 'v6', 'Older prompt for {{repository}}.')],
+        policy: new LoopPolicy({ maxIterations: 5, tokenBudget: 100_000 }),
+        contextBudget: { maxTokens: 100_000, maxResultTokens: 8_000 },
+      });
+      return { chats, sessionId, model, lookup, llmCalls, useCase };
+    };
+
+    it('runs a question on another loaded prompt version and logs that version on every call', async () => {
+      const { useCase, sessionId, model, llmCalls } = await build([
+        { toolCalls: [call('t1', 'lookup', { key: 'a' })] },
+        { text: final('Done.', ['lk-a']) },
+      ]);
+
+      await useCase.execute({ sessionId, question: 'q', promptVersion: 'v6' });
+
+      expect(model.requests.map((r) => r.system)).toEqual([
+        'Older prompt for label-of-repo-1.',
+        'Older prompt for label-of-repo-1.',
+      ]);
+      expect(llmCalls.calls.map((c) => c.promptVersion)).toEqual(['answer-question@v6', 'answer-question@v6']);
+    });
+
+    it('rejects an unknown prompt version before storing the question or calling the model', async () => {
+      const { useCase, sessionId, model, chats } = await build([]);
+
+      await expect(useCase.execute({ sessionId, question: 'q', promptVersion: 'v1' })).rejects.toThrow(
+        UnknownPromptVersionError,
+      );
+      expect(model.requests).toEqual([]);
+      expect(await chats.listMessages(sessionId)).toEqual([]);
+    });
+
+    it('passes the retrieval mode to the tools, and none by default', async () => {
+      const { useCase, sessionId, lookup } = await build([
+        { toolCalls: [call('t1', 'lookup', { key: 'a' })] },
+        { text: final('Done.', ['lk-a']) },
+        { toolCalls: [call('t2', 'lookup', { key: 'b' })] },
+        { text: final('Done.', ['lk-b']) },
+      ]);
+
+      await useCase.execute({ sessionId, question: 'q1', retrievalMode: 'vector' });
+      await useCase.execute({ sessionId, question: 'q2' });
+
+      expect(lookup.calls).toEqual([
+        { key: 'a', repoId: 'repo-1', retrievalMode: 'vector' },
+        { key: 'b', repoId: 'repo-1' },
+      ]);
+    });
   });
 
   it('rejects an unknown session without calling the model', async () => {

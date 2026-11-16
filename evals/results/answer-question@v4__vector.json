@@ -1,0 +1,1121 @@
+{
+  "meta": {
+    "golden": "golden/ky.yaml",
+    "repo": "ky",
+    "commit": "3541888878c4d303a8bc2ad61815f4e048f55a5d",
+    "repoId": "40b78920-2dcd-41fb-b82b-b7dff8c9c074",
+    "when": "2026-11-16 15:12 UTC",
+    "judge": "claude-sonnet-5-5",
+    "prompt": "answer-question@v4",
+    "mode": "vector"
+  },
+  "recall": {
+    "all": {
+      "5": 0.26785714285714285,
+      "10": 0.44642857142857145
+    },
+    "identifier": {
+      "5": 0.3333333333333333,
+      "10": 0.6666666666666666
+    },
+    "conceptual": {
+      "5": 0.25,
+      "10": 0.3333333333333333
+    },
+    "multi-file": {
+      "5": 0.125,
+      "10": 0.125
+    }
+  },
+  "metrics": {
+    "refusal_rate_not_found": 0.875,
+    "false_refusal_rate": 0.0,
+    "faithfulness_mean": 3.9642857142857144,
+    "faithful_rate": 0.8571428571428571,
+    "correctness_mean": 4.928571428571429,
+    "cost_usd_total": 2.972248,
+    "evidence_recall": 0.9464285714285714
+  },
+  "questions": [
+    {
+      "id": "force-retry-error",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "What is `ForceRetryError` and what information does it carry?",
+      "outcome": "completed",
+      "answer": "`ForceRetryError` is the error Ky uses internally to trigger a retry when an `afterResponse` hook returns `ky.retry()`. It extends `KyError`. You can see it in `beforeRetry` and `beforeError` hooks and detect it with the `isForceRetryError()` type guard (`source/errors/ForceRetryError.ts:6-11`). With `ky.retry()` you can retry based on what the response contains, even when the status code is successful. The retry still respects `retry.limit` and skips the `shouldRetry` check (`source/types/ky.ts:151-205`).\n\n**What it carries.** It stores the `ForceRetryOptions` you passed to `ky.retry()` (`source/errors/ForceRetryError.ts:11-15, 48-50`):\n\n| Field | Type | Meaning |\n|---|---|---|\n| `name` | `'ForceRetryError'` | Fixed error name |\n| `code` | `string \\| undefined` | Your label for the retry, e.g. `'RATE_LIMIT'` |\n| `customDelay` | `number \\| undefined` | Delay before the retry, taken from `options.delay` |\n| `customRequest` | `Request \\| undefined` | A replacement `Request` for the retry, taken from `options.request` (for example, a fallback endpoint) |\n| `message` | `string` | `'Forced retry'`, or `'Forced retry: <code>'` when a code is given. An empty code still counts, giving `'Forced retry: '` |\n| `cause` | `Error` | Only set when `options.cause` was passed. Values that aren't `Error`s are wrapped in `NonError` |\n\n```ts\nsuper(\n\toptions?.code === undefined ? 'Forced retry' : `Forced retry: ${options.code}`,\n\tcause ? {cause} : undefined,\n);\n```\n(`source/errors/ForceRetryError.ts:42-46`)\n\nWhen no cause is given, the error has no own `cause` property at all (`test/errors.ts:103-106`). The `cause` option exists so you can keep the error chain, for example by passing on an error caught while validating the response body (`source/core/constants.ts:101-121`).\n\n**Validation.** The constructor throws a `TypeError` in these cases (`source/errors/ForceRetryError.ts:19-36`):\n- the options are `null`\n- `delay` is not a non-negative number or `Infinity`. This rules out negative values and `NaN`, which would otherwise quietly collapse the backoff in `setTimeout`.\n- `code` is not a string\n- `request` is not a `Request`\n\n**Example of reading it in a hook:**\n```ts\nif (isForceRetryError(error)) {\n\tconsole.log(`Forced retry #${retryCount}: ${error.message}`);\n\t// \"Forced retry #1: Forced retry: RATE_LIMIT\"\n}\n```\n(`source/core/constants.ts:251-254`)",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "search_code"
+      ],
+      "cited_files": [
+        "source/errors/ForceRetryError.ts",
+        "source/core/constants.ts",
+        "source/types/ky.ts",
+        "test/errors.ts",
+        "test/retry.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.056903,
+      "latency_s": 15.7,
+      "faithfulness": 3,
+      "correctness": 5,
+      "unsupported_claims": [
+        "The constructor's validation details (delay accepts non-negative number or Infinity, rejects NaN, `setTimeout` backoff collapse) are not visible in the truncated evidence",
+        "`customDelay` taken from `options.delay` and `customRequest` from `options.request` are not shown in the truncated class body",
+        "Non-Error `cause` values are wrapped in `NonError`; the evidence only shows the import",
+        "The exact `super(...)` constructor snippet at lines 42-46 is not in the evidence",
+        "Validation is stated to throw TypeError for non-string code and non-Request request; only the null-options test is shown"
+      ],
+      "rationale": "The answer matches every key fact in the gist and adds accurate-sounding detail. However, much of the constructor, field mapping and validation is quoted from lines the truncated evidence does not show. Only the class doc comment, the message tests, the null-options TypeError, and the no-cause test are directly supported.",
+      "judge_cost_usd": 0.012168,
+      "error": null
+    },
+    {
+      "id": "max-response-size-limit",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "How does `limitResponseSize` enforce the `maxResponseSize` option?",
+      "outcome": "completed",
+      "answer": "`limitResponseSize` swaps the response body for one that runs through a counting `TransformStream`. It adds up the bytes as the body is read and throws a `ResponseSizeError` once the total goes over `maxResponseSize`. Nothing is checked ahead of time against `Content-Length`. The limit only applies as the body is consumed.\n\n**The core logic** (`source/utils/body.ts:176-198`):\n\n```ts\nconst body = originalBody.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({\n\ttransform(chunk, controller) {\n\t\ttransferredBytes += chunk.byteLength;\n\t\tif (transferredBytes > maxResponseSize) {\n\t\t\tsizeError = new ResponseSizeError(request, maxResponseSize);\n\t\t\tthrow sizeError;\n\t\t}\n\t\tcontroller.enqueue(chunk);\n\t},\n}));\nreturn copyResponseMetadata(new Response(body, response), response, () => sizeError ?? getOriginalSizeError?.());\n```\n\nHow it works:\n\n1. **When the body is left alone.** The function returns the response unchanged if `maxResponseSize` is `Infinity`, or if `wrappableBody` returns nothing. That happens when there is no body, the body is already used or locked (for example by an `afterResponse` hook), or the status is a null-body status (101, 103, 204, 205, 304) (`source/utils/body.ts:8`, `167-174`, `177-180`).\n2. **Counting.** Each chunk's `byteLength` is added to a running total. The chunk is passed on only while the total is at or under the limit. Going over makes the transform throw, which errors the stream, so whatever is reading the body gets a rejection.\n3. **Keeping the error visible.** The new `Response` goes through `copyResponseMetadata`. That function records a getter for the error in a `WeakMap` keyed by the body stream. It also wraps the body-reading methods listed in `responseTypes` so they rethrow the stored `ResponseSizeError`. This is needed because Chromium replaces stream errors with a generic `TypeError`. The wrapping is applied to clones too, and if the original body already had a size error, that one is kept as a fallback (`source/utils/body.ts:112-137`, `184`, `197`).\n4. **Response details preserved.** `url`, `redirected`, `type` and `headers` are copied from the original response. `headers` reuses the original object, so a headers object that arrived immutable stays immutable. `clone()` is overridden so clones keep this behaviour (`source/utils/body.ts:139-161`).\n\n**Where it's called.** `Ky`'s private `#limitResponseSize` calls it with the request linked to that response and `this.#options.maxResponseSize` (`source/core/Ky.ts:1364-1367`).\n\n**Documented behaviour of the option** (`source/types/options.ts:251-260`): the count is of bytes after decompression and ignores `Content-Length`. The limit also applies inside `afterResponse` hooks and to responses that hooks return. Going over cancels the stream and throws `ResponseSizeError`, and the request is not retried. With `await ky(url)`, the response can resolve before the limit is hit, and the later body read is what rejects.",
+      "iterations": 5,
+      "tool_calls": [
+        "search_code",
+        "search_code",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/utils/body.ts",
+        "source/core/Ky.ts",
+        "source/types/options.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.094609,
+      "latency_s": 18.0,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "The claim that Chromium specifically is the reason for the wrapping is supported only by a code comment about Chromium replacing stream errors; fine, but 'the request is not retried' relies on the options doc, which is cited",
+        "Line citation 8 and 167-174, 177-180 are accurate, but the 'Content-Length not checked ahead of time' claim is inferred from the code and doc rather than shown directly"
+      ],
+      "rationale": "The answer's code quote and description of the TransformStream, the unwrappable cases, copyResponseMetadata, the metadata copying and the call site in Ky.ts all match the evidence. A few details are inferred rather than directly shown, but nothing contradicts the evidence. It covers every key fact in the gist.",
+      "judge_cost_usd": 0.024994,
+      "error": null
+    },
+    {
+      "id": "ky-stop-before-retry",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "What happens when a `beforeRetry` hook returns `ky.stop`?",
+      "outcome": "completed",
+      "answer": "When a `beforeRetry` hook returns `ky.stop`, Ky stops retrying, skips any remaining `beforeRetry` hooks, and resolves the request with `undefined`. It does not throw an error.\n\n**Implementation.** Ky runs the `beforeRetry` hooks one at a time in `#retryFromError`. When a hook's result is the `stop` symbol, the method returns right away, before it increments `#retryCount` or calls `#retry()` again (`source/core/Ky.ts:1202-1205`):\n\n```ts\n// If `stop` is returned from the hook, the retry process is stopped\nif (hookResult === stop) {\n\treturn;\n}\n```\n\nThe method's return type is `Promise<Response | void>` (`source/core/Ky.ts:1125`), so the `undefined` is passed back up as the result. By the time hooks run, Ky has already waited out the retry delay and checked the total timeout (`source/core/Ky.ts:1128-1145`). That wait still happens. Only the next request is skipped.\n\n**Documented caveats** (`source/types/ky.ts:125-151`):\n- The awaited response is `undefined`, so check it or use optional chaining before reading properties.\n- Body methods such as `.json()` or `.text()` don't work with it. The docs say calling one throws a `TypeError` that explains why. I didn't find the code that throws it, so this point comes from the docs only.\n- The docs generally recommend throwing an error instead. A thrown error also stops the retry and skips the remaining hooks, but it reaches the caller (`source/types/hooks.ts:206`). In the code, an error thrown by a hook is re-thrown (`source/core/Ky.ts:1173-1182`).\n- The suggested use is fire-and-forget requests where the response doesn't matter, such as logging client activity.\n\n**How it compares with other return values from the same hook:**\n- A `Request` replaces the request for the retry and stops the remaining hooks from running.\n- A `Response` is returned as the result without another fetch.\n- `{options}` updates options, and the remaining hooks still run (`source/core/Ky.ts:1189-1209`).",
+      "iterations": 4,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "search_code",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/core/Ky.ts",
+        "source/types/ky.ts",
+        "source/types/hooks.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.091735,
+      "latency_s": 15.5,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "That the stop path returns before #retryCount increment is shown (line 1214 after), fine; but claim that the `undefined` is simply 'passed back up as the result' to the request promise is inferred, as the caller code isn't shown",
+        "Claim that a Request return 'stops the remaining hooks' relies on the break at line 1193, which supports it, but a Response return skipping a fetch is inferred from the return"
+      ],
+      "rationale": "The answer matches the gist: stop returns without throwing, skips remaining hooks, and resolves undefined, with the TypeError for body methods noted from docs. Claims are mostly backed by Ky.ts 1125-1216 and the ky.ts docs; only a few minor inferences, such as how undefined propagates to the caller, are not directly shown.",
+      "judge_cost_usd": 0.024498,
+      "error": null
+    },
+    {
+      "id": "timeout-vs-total-timeout",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "What is the difference between the `timeout` and `totalTimeout` options?",
+      "outcome": "completed",
+      "answer": "The two options limit different spans of time. `timeout` limits **each attempt** on its own. `totalTimeout` limits **the whole operation**, which includes every retry and the delays between them.\n\n| | `timeout` | `totalTimeout` |\n|---|---|---|\n| Scope | Each attempt, applied separately to every retry. Shortcut methods such as `.json()` also use this value as a separate limit for reading the response body. | The entire operation, including retries and the delays between them. |\n| Default | `10000` ms | `false` (no overall limit) |\n| `false` means | No per-attempt limit | No overall limit |\n\n(`readme.md:404-424`)\n\nBoth options accept a non-negative number of milliseconds or `false`. Anything else throws a `TypeError`. A value above 2147483647, including `Infinity`, throws a `RangeError`. Both are checked by the same `validateTimeoutOption` helper (`source/core/Ky.ts:201-213`, `source/core/Ky.ts:501-502`).\n\n**How they work together:** for each step, Ky uses whichever is smaller: `timeout` or the time left in the `totalTimeout` budget. If no budget is left, it throws a `TimeoutError` straight away (`source/core/Ky.ts:868-877`):\n\n```ts\nconst effectiveTimeout = Math.min(this.#options.timeout === false ? Number.POSITIVE_INFINITY : this.#options.timeout, remainingTotal);\n```\n\nAs a result, a late attempt can get less than its full `timeout` when the overall deadline is close. The tests show that a backoff delay which runs past `totalTimeout` ends in a rejection at the deadline, and the retry is never sent (`test/resilience.ts:504-516`).\n\nOne exception from the readme: `beforeError` hooks run after an error has been produced, and `totalTimeout` does not limit them (`readme.md:422`).\n\nThe readme's example:\n\n```js\n// Each attempt gets 5s, but the whole operation must complete within 30s\nawait ky(url, {timeout: 5000, totalTimeout: 30_000, retry: {limit: 3, retryOnTimeout: true}}).json();\n```",
+      "iterations": 5,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "search_code",
+        "read_file"
+      ],
+      "cited_files": [
+        "readme.md",
+        "source/core/Ky.ts",
+        "test/resilience.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.073436,
+      "latency_s": 17.1,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "The `effectiveTimeout` snippet is quoted as being used \"for each step\", but the evidence shows it only in the body-read path (#raceBodyRead) and does not show it applied to every attempt",
+        "Claim that a late attempt gets less than its full timeout is an inference not directly shown in the evidence"
+      ],
+      "rationale": "The answer matches the gist on every key fact: per-attempt versus overall scope, the defaults, `false` semantics, validation errors, and the body-read use of `timeout`. Nearly all of it is backed by the readme, `validateTimeoutOption`, and the tests. Two minor points are inferred rather than shown: that `#getEffectiveTimeout` applies to each step, and that late attempts get a shortened timeout.",
+      "judge_cost_usd": 0.018142,
+      "error": null
+    },
+    {
+      "id": "replace-option",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "What does `replaceOption` do when extending an instance?",
+      "outcome": "completed",
+      "answer": "`replaceOption(value)` tells `.extend()` to use your value in place of the parent's value. Normally `.extend()` deep-merges options: hooks are appended, headers are merged, search params pile up and signals are combined. A wrapped value skips that merge for the property it wraps (`readme.md:1076-1096`, `source/utils/merge.ts:31-52`).\n\n```js\nconst api = ky.create({hooks: {beforeRequest: [addAuth, addTracking]}});\napi.extend({hooks: {beforeRequest: [logRequest]}});                 // [addAuth, addTracking, logRequest]\napi.extend({hooks: replaceOption({beforeRequest: [onlyThis]})});    // [onlyThis]\n```\n\n**How it works.** The function doesn't change the value. It wraps it in an object marked with a global symbol, `Symbol.for('ky.replaceOption')`. The global symbol means a wrapper made by a second, duplicated copy of Ky is still recognised. The wrapper also gets a `toJSON` that returns the original value (`source/utils/merge.ts:6-13, 53-61`). During merging, `getReplaceState` checks for that marker and unwraps the value (`source/utils/merge.ts:20-29`). Each kind of option then handles the replace case its own way:\n\n- **`hooks`**: wrapping the whole `hooks` object merges it onto an empty object, so every parent hook type is dropped, not just the ones you list (`source/utils/merge.ts:451-458`). You can also wrap a single hook type, which replaces only that array (`source/utils/merge.ts:204-205`).\n- **`headers`**: merged onto `{}` instead of the inherited headers (`source/utils/merge.ts:463-467`). A tests shows that a normal `.extend()` after a replace merges with the replaced set (`test/main.ts:3251-3265`).\n- **`searchParams`**: the wrapped value is cloned and used as is, keeping its form (string, object, `URLSearchParams` or tuples), instead of being appended (`source/utils/merge.ts:400-416`). You can also wrap a single key's value. That key's inherited values are replaced and the other keys still merge (`source/utils/merge.ts:301-313`).\n- **`context`**: replaced with a shallow copy of the new object instead of being shallow-merged. Only a wrapper around the whole `context` is supported (`source/utils/merge.ts:379-394`, `:34`).\n- **`signal`**: inherited signals are cleared before yours is added. Without the wrapper, the signals are combined with `AbortSignal.any` (`source/utils/merge.ts:360-368`, `readme.md:1078`).\n- **`retry` and other deep-merged objects**: the parent value isn't merged in. For `retry`, the wrapper also skips expanding a number into `{limit: n}` (`source/utils/merge.ts:431-446`).\n\nInside `json` (your own data), only use it where it replaces an inherited value. Ky doesn't look for wrappers anywhere else in `json`; if a wrapper there has nothing to replace, `toJSON` unwraps it when the body is serialized (`source/utils/merge.ts:34, 57-58`).",
+      "iterations": 6,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "read_file",
+        "search_code",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/utils/merge.ts",
+        "readme.md",
+        "test/main.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.117699,
+      "latency_s": 23.3,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "\"Without the wrapper, the signals are combined with `AbortSignal.any`\" is cited to lines 360-368 and readme:1078; the AbortSignal.any call is in lines 476-480, and readme 1078 only says signals are combined.",
+        "The retry claim that the wrapper skips expanding a number into `{limit: n}` is only partly shown; the code skips the expansion when isReplace, but the claim that the parent value isn't merged is inferred."
+      ],
+      "rationale": "The answer matches the gist: it describes the Symbol.for marker, replacement of hooks (including a single hook type), headers, searchParams and context, and gives the correct example. Nearly all claims are backed by merge.ts and the readme; a few citations are slightly off or inferred.",
+      "judge_cost_usd": 0.027594,
+      "error": null
+    },
+    {
+      "id": "prefix-url-renamed",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "What happens if I still pass the `prefixUrl` option?",
+      "outcome": "completed",
+      "answer": "The request fails straight away with an error. `prefixUrl` is not quietly ignored and is not treated as `prefix`. The `Ky` constructor checks for it before doing anything else:\n\n```ts\nif (Object.hasOwn(options, 'prefixUrl')) {\n\tthrow new Error(prefixUrlRenamedErrorMessage);\n}\n```\n(`source/core/Ky.ts:469-471`)\n\nThe error message is defined at `source/core/Ky.ts:63`:\n\n> The `prefixUrl` option has been renamed `prefix` in v2 and enhanced to allow slashes in input. See also the new `baseUrl` option for improved flexibility with standard URL resolution: https://github.com/sindresorhus/ky#baseurl\n\nWhat this means in practice:\n\n- **The value doesn't matter.** The check only asks whether the key is present, so `{prefixUrl: ''}` and even `{prefixUrl: undefined}` throw too. The tests confirm this (`test/prefix.ts:62-71`).\n- **The input type doesn't matter.** It throws whether `input` is a string, a `URL` or a `Request` (`test/prefix.ts:73-87`).\n- **It throws inside the request promise.** The tests use `t.throwsAsync`, so with `await ky(...)` you get a rejected promise.\n- **Only keys set directly on the options object count.** `Object.hasOwn` doesn't look at inherited properties. In a test, an options object that inherits `prefixUrl` from its prototype but sets its own `prefix` runs fine and uses `prefix` (`test/prefix.ts:53-61`).\n\n**To migrate:** rename the option to `prefix`. It joins the prefix and the input as plain strings, trimming the slashes where they meet (`source/core/Ky.ts:251-255`). Or switch to `baseUrl`, which resolves the URL the same way `new URL(input, baseUrl)` does. The README recommends `baseUrl` in most cases (`readme.md:1751-1758`).",
+      "iterations": 5,
+      "tool_calls": [
+        "search_code",
+        "search_code",
+        "search_code",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/core/Ky.ts",
+        "test/prefix.ts",
+        "readme.md"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.093561,
+      "latency_s": 17.6,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "The Ky constructor checks for prefixUrl \"before doing anything else\" - evidence shows it runs after the input type check and destructuring",
+        "Claimed the test at test/prefix.ts:53-61 shows an inherited prefixUrl with own prefix; lines are partly visible but 53-61 coverage is fine, though the claim that 'with await ky(...) you get a rejected promise' is inferred from t.throwsAsync rather than shown in the constructor code"
+      ],
+      "rationale": "The answer matches the gist: an own-key check in the constructor throws the rename error, with the message and tests quoted accurately. Minor overstatement in \"before doing anything else\", since the input type check and destructuring come first, and the rejected-promise behavior is inferred from tests.",
+      "judge_cost_usd": 0.02054,
+      "error": null
+    },
+    {
+      "id": "before-error-hook-flow",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "How are `beforeError` hooks applied to an error before ky throws it?",
+      "outcome": "completed",
+      "answer": "Ky passes the error through all `beforeError` hooks in a private method, `#throwProcessedError`, and then throws whatever comes out (`source/core/Ky.ts:783-812`):\n\n```ts\nlet processedError: Error = error;\nfor (const hook of this.#options.hooks.beforeError) {\n\tconst hookResult: unknown = await hook({\n\t\trequest,\n\t\toptions: this.#getNormalizedOptions(),\n\t\terror: processedError,\n\t\tretryCount: this.#retryCount,\n\t});\n\tif (isError(hookResult)) {\n\t\tprocessedError = hookResult;\n\t}\n}\nthrow processedError;\n```\n\n**How it works:**\n\n1. **Some errors skip the hooks.**\n   - If the thrown value isn't an `Error` (for example, a thrown string), Ky rethrows it unchanged. The check uses `isError`, which reads an internal brand, so errors from another realm still go through the hooks (`source/core/Ky.ts:784-787`).\n   - Errors thrown by `beforeRetry` hooks are tracked in `#beforeRetryHookErrors` and also rethrown untouched (`source/core/Ky.ts:789-792`).\n\n2. **Hooks run one after another.** Each hook is awaited in order, so async hooks are supported. Each one gets a state object with:\n   - `request`: by default `#sentRequest`, the last request actually sent, not a retry clone prepared later.\n   - `options`: the normalized Ky options.\n   - `error`: the current error.\n   - `retryCount`: the current retry count.\n\n3. **Hooks are chained.** A hook replaces the error only if it returns an `Error`, which can come from another realm (`source/core/Ky.ts:805-808`). If a hook returns anything else, including `undefined`, the previous error is kept. The next hook receives whichever error is current at that point.\n\n4. **The final error is thrown** after the last hook (`source/core/Ky.ts:811`).\n\nThe type docs say the hook \"should return an `Error` instance\". They list the errors it receives during the request lifecycle: `HTTPError`, `NetworkError`, `TimeoutError`, `ResponseSizeError`, and `ForceRetryError` once the retry limit is exceeded through `ky.retry()` (`source/types/hooks.ts:303-306`).\n\nI didn't find the places in `Ky.ts` that call `#throwProcessedError`, so I can't show exactly which code paths send errors into it.",
+      "iterations": 5,
+      "tool_calls": [
+        "search_code",
+        "search_code",
+        "read_file",
+        "search_code"
+      ],
+      "cited_files": [
+        "source/core/Ky.ts",
+        "source/types/hooks.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.082199,
+      "latency_s": 16.6,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "The type-docs list of error types is cited to source/types/hooks.ts:303-306, but the evidence snippet is truncated mid-list and does not show ResponseSizeError or ForceRetryError in full (though ForceRetryError appears)",
+        "Quote that the hook 'should return an Error instance' is supported, but the claim that the hook list is exhaustive is not shown"
+      ],
+      "rationale": "The answer accurately mirrors the #throwProcessedError code at Ky.ts:783-812, including the isError check, beforeRetry hook error bypass, sequential awaited hooks, and the chaining behaviour. Only minor details drawn from truncated doc snippets are not fully visible. It covers all key points of the gist.}",
+      "judge_cost_usd": 0.020306,
+      "error": null
+    },
+    {
+      "id": "parse-json-option",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "How is the custom `parseJson` option used when reading a response?",
+      "outcome": "completed",
+      "answer": "Ky always reads the body as text first and then passes that text to a single private helper, `#parseJson`. If you set `parseJson`, the helper calls your function with the text and a `{request, response}` context. If you don't, it falls back to `JSON.parse`:\n\n```ts\n#parseJson(text: string, request: Request, response: Response): unknown {\n\tconst {parseJson} = this.#options;\n\treturn parseJson ? parseJson(text, {request, response}) : JSON.parse(text);\n}\n```\n(`source/core/Ky.ts:1007-1011`)\n\nThis helper is used in three places.\n\n**1. `.json()` on the response promise** (`ky(url).json()`), at `source/core/Ky.ts:397-431`:\n- Only the `json` body method goes through this path. Other methods like `.text()` and `.blob()` call the native method directly (lines 397-399).\n- It reads the text with `response.text()`, then awaits `#parseJson(text, request, response)`, so your function can be async (lines 401-409).\n- An empty body is a special case. If you pass a schema and there is no custom `parseJson`, Ky skips parsing and validates `undefined` instead of letting `JSON.parse('')` throw. If you do set `parseJson`, it still gets the empty string, which lets you handle empty bodies yourself (lines 407-409).\n- If you passed a schema, the parsed value then goes to `validateJsonWithSchema` (lines 411-416).\n- All of this runs inside `#raceWithTotalTimeout`, so a slow parser can end in a `TimeoutError` (lines 406, 427-429). Errors your parser throws are passed through unchanged, unless the user's abort signal fired, in which case the abort is processed as a request error (lines 418-425).\n\n**2. Plain `Response` objects (for example in hooks or `await ky(url)`)**: when `parseJson` is set, `#decorateResponse` replaces `response.json` so that it also uses your parser. It also wraps `clone()`, so clones get the same `json()` instead of the native one (`source/core/Ky.ts:765-780`):\n\n```ts\nresponse.json = async () => this.#parseJson(await response.text(), request, response);\n```\n\n**3. Error response bodies** (`#getResponseData`, used for error data such as `HTTPError`'s `data`): the body is read with a bounded timeout. Empty text gives `undefined`, and a non-JSON content type returns the raw text. Otherwise the text is parsed with `#parseJson` under a timeout, and if parsing fails the data is just `undefined` (`source/core/Ky.ts:814-850`).\n\nIn every case the `request` passed to your parser is the one that actually produced the response, from `#getResponseRequest(response)`. After a retry, that can differ from `ky.request` (`source/core/Ky.ts:815-816`).",
+      "iterations": 4,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "search_code",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/core/Ky.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.079143,
+      "latency_s": 25.2,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "\"Ky always reads the body as text first\" is a generalization; the evidence shows it only for the .json() shortcut, the decorated response and error data",
+        "Errors your parser throws pass through unchanged is only partly shown; the evidence shows a rethrow, not that nothing else wraps them"
+      ],
+      "rationale": "The answer matches the gist: it covers #parseJson, the .json() shortcut, #decorateResponse with its clone() wrapping, and error data parsing. Most details are backed by line-cited evidence. The \"always reads as text first\" claim is slightly over-general, and the evidence for the error-data path is truncated at lines 850 onward, though the cited lines still support it.",
+      "judge_cost_usd": 0.017854,
+      "error": null
+    },
+    {
+      "id": "retry-on-timeout",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "Does ky retry a request that failed with a `TimeoutError`, and what does `retryOnTimeout` change?",
+      "outcome": "completed",
+      "answer": "No. By default ky does not retry a `TimeoutError`. Setting `retry.retryOnTimeout: true` makes timeouts retriable, but only for the per-attempt timeout that fires before a response arrives. They are still subject to the usual limit, method and `shouldRetry` checks.\n\n**How the decision is made** (`source/core/Ky.ts:688-731`, `#calculateRetryDelay`). The checks run in this order:\n\n1. If the retry limit is used up, the error is rethrown (690-692).\n2. If the request method is not in `retry.methods`, the error is rethrown (703-705).\n3. If you supplied `shouldRetry`, it runs first. Returning `false` stops the retry. Returning `true` sets an override (707-722).\n4. Then comes the timeout branch:\n\n```ts\n// Default timeout behavior\nif (isTimeoutError(error)) {\n\tif (!shouldRetryOverride && !retry.retryOnTimeout) {\n\t\tthrow error;\n\t}\n\treturn this.#calculateDelay(retry, error);\n}\n```\n\nSo a `TimeoutError` is retried only if `retryOnTimeout` is true or `shouldRetry` returned `true`. If it is retried, the wait is the normal backoff from `#calculateDelay`: `retry.delay`, then jitter, capped at `backoffLimit` (`source/core/Ky.ts:665-686`).\n\n**What `retryOnTimeout` does** (`source/types/retry.ts:121-138`):\n- It defaults to `false`.\n- It covers only timeouts that happen \"before a response is returned\".\n- Timeouts while reading the response body through shortcut methods like `.json()` are never retried, because the response has already arrived.\n\n**Interaction with `shouldRetry`:** `shouldRetry` takes precedence over `retryOnTimeout` (`source/types/retry.ts:143-152`):\n- `true` forces a retry even when `retryOnTimeout` is false.\n- `false` blocks the retry even when `retryOnTimeout` is true.\n- `undefined` falls back to the default `retryOnTimeout` check.\n\nOne related detail: if `shouldRetry` itself is cut off by the overall `totalTimeout`, ky throws a new `TimeoutError` straight away (`source/core/Ky.ts:710-714`).",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/core/Ky.ts",
+        "source/types/retry.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.059944,
+      "latency_s": 11.9,
+      "faithfulness": 5,
+      "correctness": 4,
+      "unsupported_claims": [],
+      "rationale": "All claims, including the check order, the line citations, the defaults and the shouldRetry precedence, are supported by the evidence. The answer matches the gist on the default behavior, on retryOnTimeout or shouldRetry true enabling a retry, and on the normal backoff, limit and method checks. It omits the detail that the aborted AbortController is replaced with a fresh one before the next attempt, which is a minor gap.",
+      "judge_cost_usd": 0.016558,
+      "error": null
+    },
+    {
+      "id": "http-error-data",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "What does the `data` property of `HTTPError` contain, and why does `error.response.json()` fail?",
+      "outcome": "completed",
+      "answer": "`error.data` holds the error response body, already read and parsed. `error.response.json()` fails because Ky has already read that body to fill in `data`, and a fetch `Response` body can only be read once.\n\n**What `data` contains** (`source/errors/HTTPError.ts:9`, declared as `data: T | string | undefined` at line 20):\n- If the `Content-Type` is JSON, it's the parsed body. Ky uses your `parseJson` option if you set one, otherwise `JSON.parse`.\n- For any other content type, it's the body as plain text.\n- It's `undefined` if the body is empty, can't be read, is too large, fails to parse, or reading/parsing times out.\n\nThe code that fills it in is `#getResponseData` in `source/core/Ky.ts:814-853`:\n\n```ts\nconst text = await readResponseText(response, readTimeout.milliseconds);\n...\nif (!text) { return undefined; }\nif (!isJsonContentType(response.headers.get('content-type') ?? '')) { return text; }\n...\nconst data = await raceWithTimeout(Promise.resolve().then(() => this.#parseJson(text, request, response)), parseTimeout.milliseconds).catch(() => undefined);\n```\n\nLimits on reading the error body:\n- **Time:** reading and parsing are capped by the request `timeout`, or 10 seconds if `timeout` is disabled. They are also capped by whatever is left of `totalTimeout` (`source/core/Ky.ts:855-866`).\n- **Size:** the body can be at most 10 MiB (`maxErrorResponseBodySize`, `source/core/Ky.ts:62`).\n- **Different error instead:** if `maxResponseSize` is exceeded while reading the body, you get a `ResponseSizeError` instead of an `HTTPError`. If `totalTimeout` runs out, you get a `TimeoutError`.\n- **Hooks:** `data` is filled in before `beforeError` hooks run, so hooks can use it.\n\n**Why `error.response.json()` fails:** The docs say so directly (`source/errors/HTTPError.ts:11`):\n\n> The response body is automatically consumed when populating `error.data`, so `error.response.json()` and other body methods will not work. Use `error.data` instead. The `error.response` object is still available for headers, status, etc.\n\nSo read the body from `error.data`, and use `error.response` only for things like `status` and `headers`.",
+      "iterations": 5,
+      "tool_calls": [
+        "search_code",
+        "search_code",
+        "read_file",
+        "search_code",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/errors/HTTPError.ts",
+        "source/core/Ky.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.092137,
+      "latency_s": 15.9,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "A fetch Response body can only be read once is stated as the reason, while the evidence says only that the body is consumed (general fact, minor)",
+        "Claimed Ky.ts:62 for maxErrorResponseBodySize is supported, but the \"hooks can use it\" is supported only by docs; no other unsupported specifics"
+      ],
+      "rationale": "The answer closely mirrors the HTTPError docs and #getResponseData code shown in the evidence, with accurate line citations. It covers the gist's key facts (data contents, undefined cases, timeout/size bounds, body consumed so response.json() fails), and only omits the error message format, which is not asked about.}",
+      "judge_cost_usd": 0.024704,
+      "error": null
+    },
+    {
+      "id": "is-ky-error-guard",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "How does `isKyError` decide whether an error came from ky, and does it match `SchemaValidationError`?",
+      "outcome": "completed",
+      "answer": "`isKyError` looks for a brand property, not the class. It returns `true` only if the value has an `isKyError` property that is exactly `true`. It does **not** match `SchemaValidationError`, and that is on purpose.\n\n**How the check works**\n\n```ts\nexport function isKyError(error: unknown): error is KyError {\n\t// Every Ky error inherits this brand from `KyError`, including one from another realm.\n\treturn (error as any)?.isKyError === true;\n}\n```\n(`source/utils/type-guards.ts:36-39`)\n\nThe brand comes from a getter on the base class, `KyError` (`source/errors/KyError.ts:8-14`):\n\n```ts\nexport class KyError extends Error {\n\toverride name = 'KyError';\n\tget isKyError(): true { return true; }\n}\n```\n\n`HTTPError`, `NetworkError`, `TimeoutError`, `ResponseSizeError` and `ForceRetryError` all extend `KyError`, so they all inherit the brand (`source/errors/KyError.ts:1-7`).\n\nThe guard checks the property instead of using `instanceof` so that it still works across realms, such as iframes or other JS contexts, where `instanceof` fails. Two consequences:\n- Any object that carries the exact brand passes the check.\n- Look-alikes with a truthy but non-`true` value (such as `1`, `'true'` or `{}`) are rejected. The tests check this (`test/errors.ts:151-158`).\n\nThe class-specific guards, like `isHTTPError` and `isTimeoutError`, work a bit differently. They use the shared helper `isErrorType`, which accepts either `instanceof` the class, or the brand plus a matching `name` (`source/utils/type-guards.ts:8-10`).\n\n**`SchemaValidationError`**\n\n`SchemaValidationError` extends plain `Error`, not `KyError`. It sets only `name` and `issues`, so it has no `isKyError` brand (`source/errors/SchemaValidationError.ts:25-33`). As a result, `isKyError()` returns `false` for it.\n\nThe docs give the reason: `KyError` is for failures in Ky's HTTP lifecycle (bad status, timeout, retry). A schema validation error means the request succeeded but the schema you passed in rejected the data (`source/utils/type-guards.ts:15`, `source/errors/KyError.ts:6`). To catch it, use `error instanceof SchemaValidationError`.",
+      "iterations": 4,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "read_file",
+        "search_code",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/utils/type-guards.ts",
+        "source/errors/KyError.ts",
+        "source/errors/SchemaValidationError.ts",
+        "test/errors.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.060057,
+      "latency_s": 15.1,
+      "faithfulness": 3,
+      "correctness": 5,
+      "unsupported_claims": [
+        "The KyError class body is shown as `override name = 'KyError'; get isKyError(): true { return true; }` at KyError.ts:8-14, but the evidence truncates after `export class KyError extends` and never shows the getter or the name field.",
+        "Claims the brand is a getter on KyError; the evidence only shows the comment 'inherits this brand from KyError', not the getter implementation.",
+        "Cites source/errors/KyError.ts:1-7 for the subclasses extending KyError; the doc comment only says they extend it, and the subclass files are not shown.",
+        "Says SchemaValidationError sets 'only name and issues'; this is supported, but the claim that the brand getter lives at KyError.ts:8-14 is not."
+      ],
+      "rationale": "The answer's core points are well supported: the isKyError check, the isErrorType helper, SchemaValidationError extending Error, and the test for non-true brands. However, the KyError class body is quoted verbatim even though the evidence is truncated before it, so that quoted code is unsupported. The answer agrees with the gist on every key fact.",
+      "judge_cost_usd": 0.014792,
+      "error": null
+    },
+    {
+      "id": "init-hook-options",
+      "kind": "answerable",
+      "type": "identifier",
+      "question": "How do `init` hooks receive and modify the options?",
+      "outcome": "completed",
+      "answer": "Each `init` hook is a synchronous function that gets one mutable options object. It changes that object in place and returns nothing. Ky then builds the request from whatever the hooks left behind.\n\n**How they run** (`source/core/Ky.ts:349-357`):\n\n```ts\nconst initHooks = options.hooks?.init ?? [];\nconst initHookOptions = initHooks.length > 0 ? cloneInitHookOptions(options) : options;\n\nfor (const hook of initHooks) {\n\thook(initHookOptions as InitOptions);\n}\n\nconst ky = new Ky(input, initHookOptions);\n```\n\n- The hooks run in order, one after another. They all get the **same** object, so each hook sees what the earlier ones changed.\n- This happens in `Ky.create`, before the `Ky` instance exists and before the options are normalized. That is why the hook gets the plain user-facing options and not `NormalizedOptions`.\n- The type is `InitHook = (options: InitOptions) => void` (`source/types/hooks.ts:30`). `InitOptions` is `Options`, except that `retry` is mutable and each hook list is a normalized array (`source/types/options.ts:515-518`).\n\n**Copy-per-request isolation** (`source/core/Ky.ts:311-327`): if any init hooks exist, Ky first gives the hooks their own copies of these properties, so changes made in place don't leak into later requests from the same instance:\n- `headers`: always a plain object with lowercase names, even if you passed no headers, so a hook can add headers directly.\n- `context`: a **shallow** copy, so nested values (a cache, for example) are still shared.\n- `json` and `retry`: deep copies.\n- `searchParams`: copied with `cloneSearchParameters`.\n\nEverything else is copied by reference. The docs warn that `body` is not copied (`source/types/hooks.ts:8`). If a hook changes a `FormData` or `URLSearchParams` body in place, the change goes into your own object and builds up on every request, so assign a new instance instead. A value a hook assigns is used as-is, so don't change it afterwards.\n\n**Example** from the docs (`source/types/hooks.ts:16-24`):\n\n```ts\nconst api = ky.extend({\n\thooks: {\n\t\tinit: [options => { options.searchParams = {apiKey: getApiKey()}; }],\n\t},\n});\n```\n\n**Errors:** unlike other hooks, `init` hooks cannot be async. If one throws, the returned promise is rejected, and the error does not go through `beforeError` hooks (`source/types/hooks.ts:10`).",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/core/Ky.ts",
+        "source/types/hooks.ts",
+        "source/types/options.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.060744,
+      "latency_s": 13.4,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "Claim that the hook gets plain user-facing options \"before the options are normalized\" is inferred from ordering rather than shown directly",
+        "Claim that headers are \"always a plain object with lowercase names\" relies on mergeHeaderContainers, whose behavior is not shown"
+      ],
+      "rationale": "The answer matches the shown code and docs: hooks run in order on one shared object, and cloneInitHookOptions copies headers, context (shallow), json, retry, and searchParams while body is kept by reference. It also correctly reports the sync and error behavior. Only small inferences, such as normalization timing and the lowercase-header detail, go beyond the evidence. It covers all key gist facts.\n",
+      "judge_cost_usd": 0.016462,
+      "error": null
+    },
+    {
+      "id": "request-takes-too-long",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "What happens when a request takes too long to get a response?",
+      "outcome": "completed",
+      "answer": "If no response arrives within the per-attempt `timeout`, Ky aborts the fetch and rejects with a `TimeoutError`. The default `timeout` is 10 000 ms.\n\n**How it works** (`source/utils/timeout.ts:11-46`): Ky starts a timer and runs `fetch` at the same time:\n\n```ts\ntimeoutId = setTimeout(() => {\n    timedOut = true;\n    abortController?.abort();\n    reject(new TimeoutError(request));\n}, options.timeout);\n...\nfetch(request, init).then(response => {\n    if (timedOut) {\n        cancelBody(response);\n        return;\n    }\n    resolve(response);\n}).catch(reject);\n```\n\n- When the timer fires, the in-flight request is aborted through its `AbortController` and the promise rejects with `TimeoutError`.\n- A response that turns up after the timeout is thrown away, and its body is cancelled so the connection isn't left hanging (lines 34-38).\n- The timer is always cleared in `finally`, so an old timer can't abort a later retry (lines 31, 43-45).\n\n**The error** (`source/errors/TimeoutError.ts:7-14`): `TimeoutError` extends `KyError`. Its message is `Request timed out: METHOD URL`, and its `request` property holds the `Request` that timed out.\n\n**Related options** (`source/types/options.ts:211-246`):\n- `timeout` applies separately to each retry attempt. Ky's shortcut methods (e.g. `.json()`) also use it as a second timeout for reading the response body. Setting `false` turns it off. Values that aren't non-negative numbers throw a `TypeError`, and values above 2147483647 (including `Infinity`) throw a `RangeError` (`source/core/Ky.ts:201-215`).\n- `totalTimeout` caps the whole operation, including retries and the delays between them. When it runs out, you get a `TimeoutError` (`source/core/Ky.ts:855-860`). It is off by default. `beforeError` hooks are not limited by it.\n- The docs' example sets `retry: { retryOnTimeout: true }` to retry requests that timed out. I didn't find where its default value is set, so check that if you rely on it.",
+      "iterations": 4,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "read_file",
+        "search_code"
+      ],
+      "cited_files": [
+        "source/utils/timeout.ts",
+        "source/errors/TimeoutError.ts",
+        "source/types/options.ts",
+        "source/core/Ky.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.066257,
+      "latency_s": 16.2,
+      "faithfulness": 3,
+      "correctness": 5,
+      "unsupported_claims": [
+        "The quoted code snippet of timeout.ts (setTimeout callback, fetch(...).then with timedOut/cancelBody) is not visible; evidence is truncated at line 22.",
+        "Timer cleared in `finally` at lines 31, 43-45 and body cancelled at lines 34-38 are not shown in the evidence.",
+        "Abort via AbortController when timer fires is not visible in the truncated evidence.",
+        "TimeoutError extending KyError is shown, but the claim that a `retryOnTimeout` default wasn't found is fine; the claim about totalTimeout TimeoutError being at Ky.ts:855-860 is only partly supported (it covers the remaining-total-zero case)."
+      ],
+      "rationale": "The answer matches the gist on every key point. However, the timeout.ts implementation details (the code snippet, finally-clear, body cancel, abort) lie in the truncated part of the evidence. The options, error class, and validation claims are well supported.",
+      "judge_cost_usd": 0.016028,
+      "error": null
+    },
+    {
+      "id": "network-error-detection",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "How does ky tell a dropped connection apart from other errors thrown by fetch?",
+      "outcome": "completed",
+      "answer": "ky checks the shape of the error. It treats an error as a dropped connection only if it is a `TypeError` whose message matches one of the messages that runtimes use for network failures. That check lives in `isRawNetworkError`. When it matches, ky wraps the error in its own `NetworkError`. Any other error is passed through unchanged.\n\n**The check** (`source/utils/is-network-error.ts:15-46`, copied from `sindresorhus/is-network-error` v1.3.2):\n- The error must be an `Error` with `name === 'TypeError'` and a string `message` (lines 16-23).\n- Safari 17+ uses the generic message `'Load failed'` or `'Load failed (\u2026)'`. That only counts as a network error when the error has no stack, or when Sentry has marked it with `__sentry_captured__` (lines 27-32).\n- Deno: the message starts with `'error sending request for url'` (lines 35-37).\n- Chrome: `'Failed to fetch'` or `'Failed to fetch (hostname)'` (lines 40-42).\n- Anything else must exactly match a known message from a specific runtime (lines 4-13):\n```ts\n'network error', // Chrome\n'NetworkError when attempting to fetch resource.', // Firefox\n'The Internet connection appears to be offline.', // Safari 16\n'Network request failed', // `cross-fetch`\n'fetch failed', // Undici (Node.js)\n'terminated', // Undici (Node.js)\n' A network error occurred.', // Bun (WebKit) - leading space is intentional\n'Network connection lost', // Cloudflare Workers (fetch)\n```\n\n**Where ky uses it:**\n1. **When `fetch` itself throws** (`source/core/Ky.ts:1261-1272`). In the `catch`, ky first rethrows if the user aborted the request, then throws `TimeoutError` if the total timeout has run out. Only after those checks does it look for a network error:\n   ```ts\n   if (isRawNetworkError(error)) {\n       throw new NetworkError(request, {cause: error as Error});\n   }\n   throw error;\n   ```\n2. **When the connection drops while the body is being read.** This covers shortcut methods like `.json()`. A raw `TypeError` from that point is also wrapped in `NetworkError` and then goes through `#throwProcessedError`, which runs the `beforeError` hooks (`source/core/Ky.ts:902-909`).\n\n**What `NetworkError` gives you** (`source/errors/NetworkError.ts:4-19`): it extends `KyError`, has a `request` property, and keeps the original error in `cause`. Network errors from the fetch phase are retried automatically for retriable methods. Errors from the body-reading phase are not retried, because the response has already arrived.\n\n**Limitation:** detection depends on these message patterns. The docs say a runtime ky doesn't recognise may produce errors that are not wrapped in `NetworkError`, and suggest handling those cases with the `shouldRetry` option (`source/errors/NetworkError.ts:9`).",
+      "iterations": 4,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "read_file",
+        "search_code"
+      ],
+      "cited_files": [
+        "source/utils/is-network-error.ts",
+        "source/core/Ky.ts",
+        "source/errors/NetworkError.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.066195,
+      "latency_s": 17.7,
+      "faithfulness": 3,
+      "correctness": 5,
+      "unsupported_claims": [
+        "The detailed line-by-line claims about is-network-error.ts lines 16-46 (TypeError name check, Safari 'Load failed' with no stack/__sentry_captured__, Deno prefix, Chrome 'Failed to fetch') are not visible; evidence is truncated at line 15",
+        "The docs say an unrecognised runtime may produce unwrapped errors and suggest the shouldRetry option (cited at NetworkError.ts:9) is not shown in the evidence",
+        "The NetworkError class extends KyError and has a request property: the class body is not shown",
+        "Only the fetch-phase errors are retried and the exact retry behaviour for retriable methods beyond the doc comment",
+        "The Chrome message listed as 'network error' is shown, but 'Failed to fetch' handling is not in evidence"
+      ],
+      "rationale": "The answer matches the gist on all key facts: TypeError with known messages, the Safari 'Load failed' rule, the Deno prefix, and wrapping in NetworkError. However, the evidence for is-network-error.ts is cut off at line 15, so the function body details and several other claims are not supported by what was shown. The message set, the call sites in Ky.ts and the retry note are supported.",
+      "judge_cost_usd": 0.015966,
+      "error": null
+    },
+    {
+      "id": "default-retry-policy",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "Which HTTP methods and status codes are retried by default, and how many times?",
+      "outcome": "completed",
+      "answer": "By default Ky retries a failed request **2 times**. Only these methods are retried: **GET, PUT, HEAD, DELETE, OPTIONS, TRACE and QUERY**. Only these status codes trigger a retry: **408, 413, 429, 500, 502, 503 and 504**.\n\nThe defaults are in `source/utils/normalize.ts:17-35`:\n\n```ts\nconst retryMethods: HttpMethod[] = ['get', 'put', 'head', 'delete', 'options', 'trace', 'query'];\nconst retryStatusCodes = [408, 413, 429, 500, 502, 503, 504];\nconst retryAfterStatusCodes = [413, 429, 503];\n\nconst defaultRetryOptions: InternalRetryOptions = {\n\tlimit: 2,\n\tmethods: retryMethods,\n\tstatusCodes: retryStatusCodes,\n\tafterStatusCodes: retryAfterStatusCodes,\n\t...\n\tdelay: attemptCount => 0.3 * (2 ** (attemptCount - 1)) * 1000,\n\tretryOnTimeout: false,\n};\n```\n\nOther default behaviour:\n- **POST and PATCH are not retried**, because they are not in the default method list.\n- **413 needs a retry timing header.** A 413 is only retried if the response includes one, unless your `shouldRetry` returns `true` (`source/types/retry.ts:37-44`).\n- **Retry timing headers.** For 413, 429 and 503 (`afterStatusCodes`), Ky uses the delay from the response's retry timing header. `maxRetryAfter` caps that delay and defaults to `Infinity` (`source/types/retry.ts:46-51`).\n- **Backoff.** Otherwise the delay is exponential: 300 ms, then 600 ms, and so on, with no cap by default (`backoffLimit` is `Infinity`).\n- **Timeouts are not retried by default**, because `retryOnTimeout` is `false`.\n\n**Overriding the defaults.** Setting `retry` to a number only changes the limit (`retry = {limit: retry}`). Setting it to an object merges your values over the defaults (`source/utils/normalize.ts:37-49`).",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/utils/normalize.ts",
+        "source/types/retry.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.050817,
+      "latency_s": 10.6,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "POST and PATCH are not retried \"because they are not in the default method list\" is inferred from the list; no evidence explicitly mentions POST or PATCH",
+        "Citation source/types/retry.ts:46-51 for maxRetryAfter default is slightly off (it appears at lines 53-58)"
+      ],
+      "rationale": "The answer's limit, methods, status codes, afterStatusCodes, delay formula, backoffLimit, maxRetryAfter and retryOnTimeout claims all match normalize.ts and retry.ts. Only minor points are unsupported, such as the POST/PATCH inference and a slightly off line citation. It covers all key gist facts and contradicts none, though it does not mention jitter being off.",
+      "judge_cost_usd": 0.014516,
+      "error": null
+    },
+    {
+      "id": "upload-progress",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "How can I track the progress of a large file upload, and how is the total size estimated?",
+      "outcome": "completed",
+      "answer": "Pass an `onUploadProgress` callback. Ky turns the request body into a stream and calls your callback as chunks go out. Before sending, it estimates `totalBytes` from the `body` you passed. When the upload finishes, the last event reports the real number of bytes sent.\n\n```ts\nconst response = await ky.post('https://example.com/upload', {\n\tbody: largeFile,\n\tonUploadProgress: (progress, chunk) => {\n\t\tconsole.log(`${progress.percent * 100}% - ${progress.transferredBytes} of ${progress.totalBytes} bytes`);\n\t}\n});\n```\n(`source/types/options.ts:335-342`)\n\n**How it's wired up**\n\n`streamRequest` builds a new `Request` with `duplex: 'half'`. Its body is the original body passed through `withProgress` (`source/utils/body.ts:217-242`).\n\nIt leaves the request untouched, so you get no progress events, when:\n- there is no body, or the body has already been read or locked\n- the request uses `keepalive` or `mode: 'no-cors'`\n- a hook returned an object that isn't a real `Request` (`source/utils/body.ts:219-228`)\n\nUploads also need request-stream support. In Chromium they need an HTTP/2 or HTTP/3 connection. Over HTTP/1.1 the upload fails with a network error. The docs suggest retrying without progress by returning `{options: {onUploadProgress: undefined}}` from a `beforeRetry` hook (`source/types/options.ts:322`).\n\n**How the total is estimated**\n\n`totalBytes = getBodySize(originalBody ?? request.body) || getContentLength(request.headers)` (`source/utils/body.ts:231`). `getBodySize` (`source/utils/body.ts:29-76`) works by body type:\n- **`Blob` / `File`**: `body.size`.\n- **`ArrayBuffer` / typed arrays**: `byteLength`.\n- **`string`**: UTF-8 encoded byte length.\n- **`URLSearchParams`**: encoded length of `toString()`.\n- **`FormData`**: an approximation. For each entry it adds:\n  - the boundary line, using a stand-in boundary length (`usualFormBoundarySize`)\n  - the `Content-Disposition` header, plus `filename` and `Content-Type` for blobs\n  - the CRLFs and the value's bytes\n\n  It then adds the closing boundary. The estimate is meant to err high, because a low estimate would make `percent` hit its ceiling part way through the upload (`source/utils/body.ts:34-56`). An empty `FormData` reports `0`.\n- **Anything else, such as a `ReadableStream`**: `0`. Ky then falls back to a `content-length` header you set. Browsers drop that header, so in a browser the total stays `0` (`source/types/options.ts:327`).\n\n**How progress is reported** (`withProgress`, `source/utils/body.ts:78-110`)\n- Each event is emitted for the previous chunk, which lets the last chunk be reported in `flush`.\n- `percent = transferredBytes / totalBytes`. If the total is unknown (`0`), `percent` is `0`.\n- If the estimate is too low, `percent` is held at `1 - Number.EPSILON` so it never reaches 100% early, and the reported `totalBytes` is raised to at least `transferredBytes`.\n- The final event always has `percent: 1` and `totalBytes` equal to the bytes actually sent.\n\nDon't throw from the callback. A throw fails the upload stream, which surfaces as a `NetworkError` and is retried like any other network error, so your callback runs again. To cancel, use an `AbortController` signal (`source/types/options.ts:329`).",
+      "iterations": 6,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "search_code",
+        "read_file",
+        "search_code",
+        "search_code",
+        "read_file",
+        "search_code",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/types/options.ts",
+        "source/utils/body.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.172106,
+      "latency_s": 24.2,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "The claim that a hook-returned non-Request object is skipped is cited at lines 219-228, which supports it, but the claim that the total is estimated from `body` 'before sending' is only loosely supported by the doc comment.",
+        "The detail that the last-chunk-delay design exists 'which lets the last chunk be reported in flush' is inferred, not stated in the evidence."
+      ],
+      "rationale": "The answer closely matches the evidence for getBodySize, withProgress, streamRequest, and the option docs, with only minor inferred explanations. It covers all the gist's key facts: the sizing per body type, the FormData approximation, the content-length fallback, percent capping, the final event at 1, and the skip conditions. It does not state the 40-byte boundary value, but that is minor.",
+      "judge_cost_usd": 0.035066,
+      "error": null
+    },
+    {
+      "id": "create-vs-extend",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "What is the difference between creating a fresh instance and extending an existing one?",
+      "outcome": "completed",
+      "answer": "The difference is whether the new instance keeps its parent's defaults. `create()` starts over with only the options you pass. `extend()` merges your options on top of the parent instance's defaults.\n\n**Implementation** (`source/index.ts:42-50`):\n\n```ts\nky.create = (newDefaults) => createInstance(validateAndMerge(newDefaults));\nky.extend = (newDefaults) => {\n\tif (typeof newDefaults === 'function') {\n\t\tnewDefaults = newDefaults(validateAndMerge(cloneDeep(defaults)));\n\t}\n\treturn createInstance(validateAndMerge(defaults, newDefaults));\n};\n```\n\n- **`create(options)`** passes only `newDefaults` to `validateAndMerge`. The instance's own `defaults` are never used, so you get \"complete new defaults, without inheriting from any parent instance\" (`source/types/ky.ts:82-87`).\n- **`extend(options)`** passes the current instance's `defaults` first and your new options second, so the result is built on the parent's settings (`source/types/ky.ts:89-92`).\n\n**What `extend()` adds:**\n- **Function form:** you can pass a callback that receives the parent's defaults, e.g. `api.extend(o => ({prefix: `${o.prefix}/users`}))`. The callback gets a deep copy, so changing it inside the callback doesn't change the parent instance (`source/index.ts:44-46`, `source/types/ky.ts:104-119`).\n- **Deep merge by default:** hooks are appended, headers are merged, search parameters accumulate, and signals are combined (`source/types/ky.ts:100-102`). `context` is the exception: it is merged shallowly, so a nested object you pass replaces the inherited one instead of merging with it (`source/types/options.ts:413-432`).\n- **Overriding inherited values:**\n  - Use `replaceOption(...)` to fully replace a merged property, such as a signal.\n  - Pass `undefined` for a header, hook entry or `signal` to remove it (`source/types/ky.ts:96-102`).\n\nBoth methods call `createInstance`, so either way you get a separate instance and the parent is unchanged. In the doc example, `api.get('version')` still resolves against `/api` after `usersApi` is derived from it (`source/types/ky.ts:110-118`).",
+      "iterations": 4,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "search_code",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/index.ts",
+        "source/types/ky.ts",
+        "source/types/options.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.06641,
+      "latency_s": 15.1,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "The code snippet is presented as source/index.ts:42-50 but is paraphrased with types removed (minor)",
+        "\"signals are combined\" is cited to ky.ts:100-102, but line 102 is where this is stated, so the range is slightly loose",
+        "The parent stays unchanged because both methods call createInstance is an inference, not stated in evidence"
+      ],
+      "rationale": "The answer is well supported by index.ts lines 42-50 and the ky.ts docs, including the function form with a deep copy, deep merge, the context shallow-merge exception, and the replaceOption and undefined removal. It covers the gist's create/extend/function-form points, though it omits the shortcut methods, stop, retry and the default export. A few minor inferences and a lightly paraphrased snippet are not directly in the evidence.",
+      "judge_cost_usd": 0.018654,
+      "error": null
+    },
+    {
+      "id": "header-merging",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "How are headers combined when both the instance defaults and a request set them, and how do I remove an inherited header?",
+      "outcome": "completed",
+      "answer": "Instance headers and request headers are merged key by key. Header names are lowercased, and when the same header appears in both, the later source (the request or the `.extend()` call) wins. To remove an inherited header, set it to `undefined`.\n\n**How merging works**\n\nAt the top level of the options, each `headers` source is merged into the headers collected so far (`source/utils/merge.ts:463-468`):\n\n```ts\nconst {value: headerValue, isReplace} = getReplaceState((source as any).headers);\nheaders = mergeHeaderContainers(isReplace ? {} : headers, headerValue as KyHeadersInit);\n```\n\n`mergeHeaderContainers` turns both sources into plain objects. It then writes each entry into a `Map` keyed by the lowercased name, base headers first and new headers second. So `Authorization` and `authorization` count as the same header, and the later value replaces the earlier one (`source/utils/merge.ts:188-196`). You can pass headers as a `Headers` instance or a plain object. Either way, the merged result is a plain object with lowercase keys (`source/types/options.ts:465`).\n\nIf you wrap the new headers in `replaceOption(...)`, the merge starts from `{}`. That drops all inherited headers instead of merging with them (line 465 above).\n\n**Removing an inherited header**\n\nPass the header with the value `undefined`. During merging, `undefined` is kept as a deletion marker, so it can also remove a header that came from a `Request` input when the request is built (`source/utils/merge.ts:186-187`). The docs give this example (`source/types/options.ts:467-497`):\n\n```ts\nconst original = ky.create({headers: {rainbow: 'rainbow', unicorn: 'unicorn'}});\nconst extended = original.extend({headers: {rainbow: undefined}});\n// in a beforeRequest hook: request.headers.has('rainbow') \u2192 false, has('unicorn') \u2192 true\n```\n\nA `Headers` instance can't store a real `undefined`. In that case only, the string `'undefined'` counts as a deletion (`source/utils/merge.ts:169-181`). In a plain object, `'undefined'` is just an ordinary string value.",
+      "iterations": 4,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "read_file",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/utils/merge.ts",
+        "source/types/options.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.061529,
+      "latency_s": 14.4,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "Claim that a Headers instance 'can't store a real undefined' is supported, but the claim that replaceOption drops inherited headers is only inferred from code line 465 (supported), while the 'later source (the request or the .extend() call)' framing is slightly inferred"
+      ],
+      "rationale": "The answer matches the evidence on lowercase normalization via a Map, later-wins merging, undefined as a deletion marker, the Headers-instance 'undefined' string case, and replaceOption starting from {}. The only soft spot is the request/.extend() framing of the sources, which is implied rather than shown. It covers all key facts in the gist.",
+      "judge_cost_usd": 0.01499,
+      "error": null
+    },
+    {
+      "id": "query-string-handling",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "How are query string parameters added to the request URL when the URL already has some?",
+      "outcome": "completed",
+      "answer": "The `searchParams` option is **merged into** the query string already on the URL. Nothing is replaced by default: new entries are appended after the existing ones, so a repeated key ends up in the URL twice.\n\n**Where it happens.** Ky first builds the `Request` from the input. If `searchParams` is set, it parses the request URL, applies the parameters to it, and rebuilds the `Request` only if the URL actually changed (`source/core/Ky.ts:544-554`):\n\n```ts\nconst url = new URL(this.request.url);\napplySearchParameters(url, searchParams);\nif (url.href !== this.request.url) { /* recreate Request with new url */ }\n```\n\n**How `applySearchParameters` merges** (`source/core/Ky.ts:279-309`) depends on what type of value you pass:\n\n- **String:** a leading `?` is stripped. The rest is joined to the existing query with `&`, or becomes the query if there wasn't one. An empty string changes nothing.\n  ```ts\n  url.search = url.search ? `${url.search}&${stringSearchParameters}` : `?${stringSearchParameters}`;\n  ```\n- **Plain object:** each entry is added with `url.searchParams.append(key, value)`. A value of `undefined` works differently: it **removes** that key from the input URL.\n- **`URLSearchParams` or an array of key/value pairs:** it is turned into a `URLSearchParams` and each pair is appended.\n\n**Removing keys first.** Before anything is appended, any keys that were marked as deleted while options were being merged (for example through `ky.extend`) are removed from the input URL. That way, later entries can add those keys back on purpose (`source/core/Ky.ts:281-288`).\n\n**Avoiding needless rewrites.** Keys are deleted only if they are actually present (`source/core/Ky.ts:272-277`). The comment there explains why: `URLSearchParams#delete()` re-serializes the whole query even when the key is missing, which could turn an untouched `%20` into `+`.\n\nThe option's own documentation agrees: \"Setting this will merge with any existing search parameters in the input URL\" (`source/types/options.ts`).",
+      "iterations": 4,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "search_code",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/core/Ky.ts",
+        "source/types/options.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.071031,
+      "latency_s": 14.1,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "Mentions of `ky.extend` as the example path for marking deleted keys is not shown in the Ky.ts evidence (only inferred)",
+        "Claim that an empty string changes nothing is fine, but \"a repeated key ends up in the URL twice\" is inferred from append behavior rather than shown directly"
+      ],
+      "rationale": "The answer closely matches the code shown in Ky.ts lines 272-309 and 544-554 and the options doc line. It covers all the gist's points. The only minor reaches are the ky.extend example and the explicit repeated-key consequence, which are inferred rather than directly shown.",
+      "judge_cost_usd": 0.017528,
+      "error": null
+    },
+    {
+      "id": "cancel-during-retry-wait",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "Can I cancel a request while it is waiting before its next retry?",
+      "outcome": "completed",
+      "answer": "Yes. Pass an `AbortSignal` through the `signal` option. When you abort it, the wait before the next retry stops straight away instead of running out the timer.\n\n**How it works**\n\nWhen an attempt fails, `#retryFromError` first checks whether you have already aborted. It then waits out the retry delay using your signal (`source/core/Ky.ts:1125-1143`):\n\n```ts\nthis.#throwIfAbortedByUser();\n\nconst retryDelay = Math.min(await this.#calculateRetryDelay(error), maxSafeTimeout);\nconst delayOptions = {signal: this.#userProvidedAbortSignal};\n...\n// Only use user-provided signal for delay, not our internal abortController\nawait delay(retryDelay, delayOptions);\n```\n\nThe `delay` helper (`source/utils/delay.ts:9-29`) handles the abort:\n- If the signal is already aborted, it throws at once (`signal.throwIfAborted()`).\n- Otherwise it listens for `abort`. When that fires, it clears the timer and rejects with `signal.reason`. No further attempt starts and no `beforeRetry` hooks run.\n- If the delay finishes normally, it removes the listener.\n\n**Things to know**\n- Only the signal you pass in can cancel the wait. Ky's own internal abort controller, which it uses for per-attempt timeouts, is deliberately not used here (see the comment at `source/core/Ky.ts:1142`). A per-attempt timeout therefore doesn't cut the backoff short.\n- `totalTimeout` also limits the wait. If the retry delay would use up the remaining time, Ky waits only for what's left and then throws a `TimeoutError` without making another attempt (`source/core/Ky.ts:1131-1140`). That shorter wait can still be cancelled with your signal.\n- Cancelling also works while a `beforeRetry` hook is running. If a hook throws after you abort, Ky reports the abort, not a hook error (`source/core/Ky.ts:1173-1175`).\n\n```ts\nconst controller = new AbortController();\nconst promise = ky('https://example.com', {retry: 5, signal: controller.signal});\n// later, even mid-backoff:\ncontroller.abort();\n```",
+      "iterations": 4,
+      "tool_calls": [
+        "search_code",
+        "search_code",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/core/Ky.ts",
+        "source/utils/delay.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.075631,
+      "latency_s": 12.9,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "delay helper \"removes the listener\" when the delay finishes normally (the evidence snippet is truncated at line 24)",
+        "\"No further attempt starts and no beforeRetry hooks run\" after abort is inferred from the flow, not shown directly",
+        "A per-attempt timeout doesn't cut the backoff short is inferred from the comment, not explicitly shown"
+      ],
+      "rationale": "The answer matches the gist: the delay throws if the signal is already aborted, listens for abort, clears the timer and rejects with the reason, and uses the user signal rather than the internal controller. Citations to Ky.ts and delay.ts are supported; a few details, such as listener removal on normal completion, fall in truncated or inferred parts.",
+      "judge_cost_usd": 0.019324,
+      "error": null
+    },
+    {
+      "id": "mock-response-before-request",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "Can a hook skip the network entirely and return a canned response instead?",
+      "outcome": "completed",
+      "answer": "Yes. A `beforeRequest` hook that returns a `Response` stops Ky from making any HTTP request, and that response is used as the result. The hook docs say so directly (`source/types/hooks.ts:149`):\n\n> It can also return a `Response` to completely avoid making an HTTP request, in which case remaining `beforeRequest` hooks are skipped. This can be used to mock a request, check an internal cache, etc.\n\nReturning a `Request` works differently: it only replaces the outgoing request, and the remaining hooks still run.\n\n**How it works** (`source/core/Ky.ts:590-598`):\n\n```ts\nconst beforeRequestResponse = await this.#runBeforeRequestHooks();\n...\nlet response = beforeRequestResponse ?? await this.#retry();\n```\n\n`#retry()` is the path that eventually calls `#fetch()`, which invokes the `fetch` option (`source/core/Ky.ts:1218-1247`). When a hook supplies a response, that whole path is skipped.\n\n**What still applies to a canned response:**\n- **`afterResponse` hooks** still run on it (`source/core/Ky.ts:612`).\n- **Download progress:** response decoration and `onDownloadProgress` streaming still apply (`source/core/Ky.ts:649-662`).\n- **No retries on a failing status:** if your canned response has an error status (and `throwHttpErrors` applies), Ky throws an `HTTPError` right away instead of retrying. Hook responses are tracked in `#hookResponses` and \"used as-is, so a failing status throws instead of being retried\" (`source/core/Ky.ts:452-453`, `606-607`, `638-640`).\n\n**`beforeRetry` hooks can do this too.** Their return type includes `Response` (`source/types/hooks.ts:77`), so a retry can also be answered without the network. The same throw-instead-of-retry rule applies to those responses.\n\nA minimal mock:\n\n```ts\nky.extend({hooks: {beforeRequest: [() => new Response(JSON.stringify({ok: true}))]}});\n```",
+      "iterations": 7,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "search_code",
+        "search_code",
+        "read_file",
+        "search_code",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/types/hooks.ts",
+        "source/core/Ky.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.133118,
+      "latency_s": 19.9,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "Claim that `#runBeforeRequestHooks` returning a response skips `#retry()` entirely is inferred from the `??` expression, not shown in the hook implementation",
+        "Claim that a `beforeRetry` response follows the same throw-instead-of-retry rule is supported only by the comment, not the code path"
+      ],
+      "rationale": "The answer is well supported by the hook docs at hooks.ts:149, the `#run` code at Ky.ts:590-598, and the `#hookResponses` comment and `responseFromHook` throw at 606-640. It covers all key facts in the gist, including that a returned Request replaces the outgoing one and the failing-status behavior. Minor inference gaps remain, such as the `#runBeforeRequestHooks` internals not being shown.",
+      "judge_cost_usd": 0.027504,
+      "error": null
+    },
+    {
+      "id": "retry-based-on-response-body",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "How can I inspect a successful response and make ky retry it anyway?",
+      "outcome": "completed",
+      "answer": "Add an `afterResponse` hook that reads the response and returns `ky.retry(...)` when you want another attempt. This works even when the status is 2xx (`readme.md:712-714`, `readme.md:1150-1152`).\n\n```js\nimport ky from 'ky';\n\nconst response = await ky('https://example.com', {\n\thooks: {\n\t\tafterResponse: [\n\t\t\tasync ({response}) => {\n\t\t\t\tif (response.status === 200) {\n\t\t\t\t\tconst data = await response.json();\n\t\t\t\t\tif (data.error?.code === 'RATE_LIMIT') {\n\t\t\t\t\t\treturn ky.retry({\n\t\t\t\t\t\t\tdelay: data.error.retryAfter * 1000,\n\t\t\t\t\t\t\tcode: 'RATE_LIMIT'\n\t\t\t\t\t\t});\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t]\n\t}\n});\n```\n(from `readme.md:753-765`)\n\n**What the hook gets**\n- The hook receives `{request, options, response, retryCount}`. `response` is a clone, so you can read its body inside the hook. `retryCount` is `0` on the first request and goes up by one on each retry (`readme.md:712`, `readme.md:721`).\n- If the hook returns a `Response`, Ky uses it as the response. If it returns `ky.retry(...)`, Ky retries the request. If it returns nothing, the response passes through unchanged (`readme.md:712-714`).\n\n**How the forced retry behaves**\n- It still counts against `retry.limit`, but it skips the `shouldRetry` check (`readme.md:1152`).\n- `beforeRetry` hooks still run. In them, the error is a `ForceRetryError` (`readme.md:1152`).\n\n**Options for `ky.retry(options)`** (`readme.md:1156-1209`)\n- `delay`: how long to wait, in milliseconds. A custom delay skips jitter and `backoffLimit`. It must be a non-negative number (or `undefined`), otherwise Ky throws a `TypeError`.\n- `code`: a string that shows up in the error message, for example `'Forced retry: RATE_LIMIT'`.\n- `cause`: the original error, which becomes the `cause` of the `ForceRetryError`.\n- `request`: a replacement `Request` to send instead, for example with a refreshed `Authorization` header (`readme.md:737-751`). Ky swaps in its own abort signal. If you already read the original request's body, clone the request first or give it a new body.\n\n**Things to watch out for**\n- Throwing any other error from `afterResponse` is treated as fatal and won't trigger a retry, so return `ky.retry()` rather than throwing (`readme.md:719`).\n- Ky sends a replacement request exactly as you built it. If it points at a different origin, remove any credentials you don't want sent there (`readme.md:716-717`, `readme.md:1211-1212`).",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "readme.md"
+      ],
+      "evidence_recall": 0.0,
+      "cost_usd": 0.056506,
+      "latency_s": 12.5,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "Claim that forced retry skips the method check is not stated (the answer omits this, not a claim); the 'delay must be non-negative number' detail is supported; minor: 'If it returns nothing, the response passes through unchanged' is not explicitly stated in the evidence"
+      ],
+      "rationale": "The answer is well supported by the readme lines cited, including the hook state, ky.retry options, the retry.limit and shouldRetry behavior, and the fatal-error rule. The one gap is that the 'returns nothing passes through' claim is only implied. It covers the gist's key facts and contradicts none, though it does not mention the skipped method check.",
+      "judge_cost_usd": 0.015476,
+      "error": null
+    },
+    {
+      "id": "url-prefix-and-base",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "How is the final request URL built when an instance has both a path prefix and a base URL?",
+      "outcome": "completed",
+      "answer": "The URL is built in two steps, both in `resolveInput`: first the `prefix` is joined to the input string, then the joined string is resolved against `baseUrl` (`source/core/Ky.ts:245-270`).\n\n**1. Join with `prefix` (simple string concatenation).** Trailing slashes are trimmed from the prefix and leading slashes from the input. The two are then joined with exactly one `/`:\n\n```ts\nif (prefix) {\n\tconst normalizedPrefix = prefix.replace(/\\/+$/, '');\n\tconst normalizedInput = input.replace(/^\\/+/, '');\n\tinput = `${normalizedPrefix}/${normalizedInput}`;\n}\n```\n\nThis means a leading slash on the input is effectively ignored. With `prefix: '/api/'`, both `'users'` and `'/users'` become `/api/users` (`source/types/options.ts:158-175`).\n\n**2. Resolve against `baseUrl` (standard URL resolution).** The joined string is checked first:\n- If it looks like `http:` or `https:` without `//` after it, a `TypeError` is thrown.\n- If it has no scheme (it's relative), it is resolved with `new URL(input, new Request(baseUrl).url)`. Wrapping `baseUrl` in a `Request` means a relative `baseUrl` is first resolved against the environment's base URL.\n- If it is already absolute (it has a scheme), `baseUrl` is skipped.\n\n```ts\nif (!isAbsoluteInput(normalizedInput)) {\n\treturn new URL(input, (new Request(baseUrl)).url);\n}\n```\n(`source/core/Ky.ts:257-269`)\n\n**What this means in practice:**\n- Since the prefix is applied first, normal URL rules then apply to the combined string. If the prefix starts with `/` (for example `prefix: '/v1'`), the result is origin-relative: `/v1/users` resolves against the origin of `baseUrl`, so any path in `baseUrl` is replaced.\n- If the prefix has no leading slash (`prefix: 'v1'`) and `baseUrl` ends with `/` (`'https://x.com/api/'`), you get `https://x.com/api/v1/users`.\n- The docs recommend a trailing slash on a `baseUrl` that has a path. Without it, page-relative inputs replace the last path segment instead of adding to it (`source/types/options.ts:136`).\n- An absolute prefix (for example `https://other.com`) produces an absolute URL, so `baseUrl` is ignored.\n- Both steps only apply when the input is a string. `URL` and `Request` inputs are passed through unchanged (`source/core/Ky.ts:247-249`).\n\nThe old `prefixUrl` option was renamed to `prefix` in v2, and using the old name produces an error (`source/core/Ky.ts:63`).",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/core/Ky.ts",
+        "source/types/options.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.062996,
+      "latency_s": 15.2,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "Concrete worked examples (prefix '/v1' replaces baseUrl path; prefix 'v1' with 'https://x.com/api/' gives https://x.com/api/v1/users) are inferred from URL resolution rules rather than shown in the evidence",
+        "Claim that an absolute prefix produces an absolute URL so baseUrl is ignored is inferred, not explicitly shown"
+      ],
+      "rationale": "The answer accurately describes the two-step process in resolveInput, matching the code shown at Ky.ts:245-270 and the docs. It covers all gist points: string-only handling, slash trimming, relative-only resolution, and the TypeError. The extra practical examples follow from standard URL resolution but are not shown in the evidence. The `prefixUrl` rename claim is supported by Ky.ts:63.</br>",
+      "judge_cost_usd": 0.018052,
+      "error": null
+    },
+    {
+      "id": "http2-in-node",
+      "kind": "answerable",
+      "type": "conceptual",
+      "question": "How do I make requests over HTTP/2 in Node.js?",
+      "outcome": "completed",
+      "answer": "Ky has no HTTP/2 switch of its own. It runs on Node's built-in `fetch`, which is built on Undici. Undici can speak HTTP/2, but it's off by default. To turn it on, create an Undici dispatcher with `allowH2: true` and pass it to Ky through the `dispatcher` option (`readme.md:1610-1630`):\n\n```js\nimport ky from 'ky';\nimport {Agent, Pool} from 'undici';\n\nconst agent = new Agent({\n\tfactory(origin, options) {\n\t\treturn new Pool(origin, {\n\t\t\t...options,\n\t\t\tallowH2: true\n\t\t});\n\t}\n});\n\nconst response = await ky('https://example.com', {\n\tdispatcher: agent\n}).json();\n```\n\n**With a proxy:** `ProxyAgent` also accepts `allowH2` (`readme.md:1632-1646`):\n\n```js\nimport {ProxyAgent} from 'undici';\n\nconst proxyAgent = new ProxyAgent({\n\turi: 'http://proxy.example.com:8080',\n\tallowH2: true\n});\n\nconst response = await ky('https://example.com', {dispatcher: proxyAgent}).json();\n```\n\n**For every request:** you can set the dispatcher once on an instance with `ky.extend({dispatcher: ...})`. The README shows this pattern for the proxy agent (`readme.md:1601-1607`).\n\nNote that `undici` must be installed in your project to import `Agent`, `Pool` or `ProxyAgent`. This answer comes from the README. I didn't trace in Ky's source how `dispatcher` gets passed to `fetch`.",
+      "iterations": 4,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "search_code"
+      ],
+      "cited_files": [
+        "readme.md"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.052617,
+      "latency_s": 12.0,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "Ky runs on Node's built-in `fetch`, which is built on Undici (not stated in the evidence)",
+        "`undici` must be installed in the project to import Agent, Pool or ProxyAgent"
+      ],
+      "rationale": "The code examples and line citations match the README HTTP/2 section and the ky.extend proxy pattern. The claim that Node's fetch is built on Undici and the install note are not in the evidence, but they are minor and the answer admits it did not trace the dispatcher in the source. It covers all gist facts: the Agent with a Pool factory and allowH2, the dispatcher option, and ProxyAgent with allowH2.}",
+      "judge_cost_usd": 0.015542,
+      "error": null
+    },
+    {
+      "id": "retry-delay-backoff",
+      "kind": "answerable",
+      "type": "multi-file",
+      "question": "How long does ky wait between retry attempts, and can that wait be randomized or capped?",
+      "outcome": "completed",
+      "answer": "By default ky uses exponential backoff: 300 ms before the first retry, then 600 ms, 1200 ms and so on. You can randomize the wait with `retry.jitter` and cap it with `retry.backoffLimit`. If the server sends a retry timing header, ky uses that value instead and caps it with `maxRetryAfter`.\n\n**Default delay.** `retry.delay` takes the attempt count (starting at 1) and returns milliseconds. The default is `attemptCount => 0.3 * (2 ** (attemptCount - 1)) * 1000` (`source/types/retry.ts:65-84`). You can pass your own function. It must return a non-negative number or `Infinity`, or ky throws a `TypeError`, with the error being retried kept as its `cause` (`source/core/Ky.ts:666-672`).\n\n**How the wait is computed.** In `#calculateDelay`, jitter is applied first and the cap last:\n\n```ts\nlet jitteredDelay = retryDelay;\nif (retry.jitter === true) {\n\tjitteredDelay = Math.random() * retryDelay;\n} else if (typeof retry.jitter === 'function') {\n\tjitteredDelay = retry.jitter(retryDelay);\n\tif (!Number.isFinite(jitteredDelay) || jitteredDelay < 0) {\n\t\tjitteredDelay = retryDelay;\n\t}\n}\nreturn Math.min(retry.backoffLimit, jitteredDelay);\n```\n(`source/core/Ky.ts:674-685`)\n\n- **Randomizing:** `jitter: true` gives \"full jitter\", a random value between 0 and the computed delay. You can also pass a function, for example `delay => delay * (0.8 + Math.random() * 0.4)`. If that function returns a negative or non-finite number, ky falls back to the delay without jitter. Jitter is off by default (`source/types/retry.ts:86-97`).\n- **Capping:** `backoffLimit` is the most a single retry can wait. It defaults to `Infinity`, so set it to e.g. `1000` to clamp (`source/types/retry.ts:60-75`).\n\n**Server-provided timing.** Sometimes a response with a status in `afterStatusCodes` (default `[413, 429, 503]`) carries a retry timing header such as `Retry-After`. In that case ky waits for the header's value, with no jitter and no `backoffLimit`. Only `maxRetryAfter` caps it, and that also defaults to `Infinity` (`source/core/Ky.ts:738-748`, `source/types/retry.ts:46-58`). If the header can't be parsed, ky uses the normal backoff (`source/core/Ky.ts:741-744`).\n\n**Forced retries.** A retry forced from an `afterResponse` hook with `ky.retry({delay})` waits for that custom delay. Without a delay it uses the normal calculation (`source/core/Ky.ts:698-700`).",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/core/Ky.ts",
+        "source/types/retry.ts"
+      ],
+      "evidence_recall": 0.5,
+      "cost_usd": 0.065277,
+      "latency_s": 13.3,
+      "faithfulness": 5,
+      "correctness": 5,
+      "unsupported_claims": [],
+      "rationale": "Every claim traces to the evidence: the default delay formula, the TypeError with cause, the jitter and backoffLimit logic in #calculateDelay, afterStatusCodes defaults, maxRetryAfter capping with no jitter, the malformed-header fallback, and the forced-retry customDelay. It also covers every key fact in the gist: the exponential default, retry.delay validation, jitter true and function forms with fallback, and backoffLimit defaulting to Infinity.",
+      "judge_cost_usd": 0.01717,
+      "error": null
+    },
+    {
+      "id": "json-schema-validation",
+      "kind": "answerable",
+      "type": "multi-file",
+      "question": "How do I validate a JSON response against a schema, and what is thrown when it doesn't match?",
+      "outcome": "completed",
+      "answer": "Pass a Standard Schema validator (for example Zod 3.24+) to `.json()` on the response promise. If the data doesn't match, ky throws a **`SchemaValidationError`**.\n\n```ts\nimport ky from 'ky';\nimport {z} from 'zod';\n\nconst userSchema = z.object({name: z.string()});\nconst user = await ky('/api/user').json(userSchema); // typed as the schema's output\n```\n\nThe return type comes from the schema's output type (`Promise<StandardSchemaV1InferOutput<Schema>>`). See `source/types/ResponsePromise.ts:51-67`.\n\n**When validation fails**, the error is a `SchemaValidationError` (`source/errors/SchemaValidationError.ts:25-33`):\n- `name` is `'SchemaValidationError'` and `message` is `'Response schema validation failed'`.\n- `issues` holds the schema's validation issues. Each issue has a `message` and may have a `path` (`source/types/standard-schema.ts:1-4`).\n- It extends plain `Error`, **not** `KyError`, on purpose. The HTTP request worked and only your schema rejected the data, so `isKyError()` won't match it (lines 6). Check for it with `instanceof`:\n\n```ts\nimport ky, {SchemaValidationError} from 'ky';\n\ntry {\n\tconst user = await ky('/api/user').json(userSchema);\n} catch (error) {\n\tif (error instanceof SchemaValidationError) {\n\t\tconsole.error(error.issues);\n\t}\n}\n```\n\n**Other behaviour shown in the tests** (`test/main.ts`):\n- The schema's validation can be async (lines 754-774).\n- If the body isn't valid JSON, the parse error is thrown before the schema runs (around line 866).\n- Validation still runs when `throwHttpErrors` is `false`, for example on a 500 response (around line 911).\n- If you pass something that isn't a Standard Schema, such as `null`, you get a `TypeError` with the message ``The `schema` argument must follow the Standard Schema specification`` (lines 704-709).",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "search_code"
+      ],
+      "cited_files": [
+        "source/types/ResponsePromise.ts",
+        "source/errors/SchemaValidationError.ts",
+        "source/types/standard-schema.ts",
+        "test/main.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.055995,
+      "latency_s": 13.5,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "`name` is 'SchemaValidationError' and `message` is 'Response schema validation failed' (SchemaValidationError.ts lines 25-33 not shown in evidence)",
+        "It extends plain `Error` (class body not visible in the evidence)",
+        "Validation still runs on a 500 response with throwHttpErrors false: the test title supports this, but the 500 detail is only partly visible"
+      ],
+      "rationale": "The answer matches the gist: pass a schema to .json(), SchemaValidationError with issues, not a KyError, TypeError for an invalid schema. Nearly everything is backed by the evidence, but the exact name/message and the 'extends Error' claim come from class lines that are truncated and not visible.",
+      "judge_cost_usd": 0.0129,
+      "error": null
+    },
+    {
+      "id": "custom-fetch-and-extra-options",
+      "kind": "answerable",
+      "type": "multi-file",
+      "question": "How can I plug in my own fetch implementation or pass extra fetch-only options like an undici dispatcher?",
+      "outcome": "completed",
+      "answer": "There are two mechanisms. The `fetch` option replaces the fetch function itself. Any option Ky doesn't recognise, such as `dispatcher` or Next.js's `next`, is passed through untouched in the `init` argument to fetch.\n\n**1. Custom `fetch`**\n\nThe option's type is `(input: Request, init?: RequestInit) => Promise<Response>` (`source/types/options.ts:347-374`). Your function gets the `Request` Ky built plus an `init` object, and it must resolve with a `Response`. If it resolves with something else, such as `undefined` or `{}`, Ky rejects with `TypeError: The \\`fetch\\` option must resolve with a \\`Response\\`` (`test/fetch.ts:951-960`). The documented uses are SSR framework fetch wrappers and adding logging or instrumentation:\n\n```js\nconst api = ky.create({\n\tfetch: async (request, init) => {\n\t\tconst start = performance.now();\n\t\tconst response = await fetch(request, init);\n\t\tconsole.log(`${request.method} ${request.url} - ${response.status}`);\n\t\treturn response;\n\t}\n});\n```\n\n**2. Fetch-only options like `dispatcher`**\n\nPut them straight into the Ky options. `findUnknownOptions` copies every key that isn't a standard request option or a Ky option onto the object passed to `fetch()` (`source/utils/options.ts:5-30`). It deliberately doesn't check whether the key also exists on `Request`, so runtime extensions like Next.js's `next` aren't dropped. Falsy values (`null`, `false`, `0`) are passed through too (`test/fetch.ts:256-268`).\n\n```js\nimport {EnvHttpProxyAgent} from 'undici';\nconst api = ky.extend({dispatcher: new EnvHttpProxyAgent()});\n```\n\nThe README describes `dispatcher` as \"forwarded to `fetch()` as-is. Ky does not use it, it just passes it through\" (`readme.md:461-469`). It also has an HTTP/2 example using an undici `Agent`/`Pool` with `allowH2: true` (`readme.md:1601-1630`). A test checks that a custom `fetch` receives `init.dispatcher` (`test/fetch.ts:351-355`).\n\nYou can use both together: the forwarded options arrive in the `init` argument of your custom fetch.\n\nSome details:\n- Standard request options (headers, mode, credentials, etc.) are already set on the `Request`, so they are **not** repeated in `init` (`test/request-construction.ts:354-370`). Only Ky-unknown keys go there.\n- For TypeScript, the type of a passthrough option comes from the global `RequestInit`. `@types/node` adds `dispatcher` there and Next.js adds `next`. Any extension your environment doesn't declare needs a type assertion (`readme.md:469`).",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "search_code",
+        "read_file",
+        "read_file",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/types/options.ts",
+        "source/utils/options.ts",
+        "readme.md",
+        "test/fetch.ts",
+        "test/request-construction.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.080036,
+      "latency_s": 18.4,
+      "faithfulness": 4,
+      "correctness": 5,
+      "unsupported_claims": [
+        "Test at test/fetch.ts:951-960 cited for rejection with `undefined` or `{}`; the visible lines support this, but the specific wording that Ky rejects \"with\" the TypeError is only partially shown",
+        "The README example `ky.extend({dispatcher: new EnvHttpProxyAgent()})` is shown in the evidence only as a similar snippet, not the exact import line"
+      ],
+      "rationale": "The answer is well supported: the fetch type, the TypeError message, findUnknownOptions behavior, falsy value tests, the dispatcher test, the README text and the request-construction test are all in the evidence. It covers both gist points (fetch replacement with TypeError, and forwarding of unknown options like dispatcher and next). The only minor gaps are the exact README example lines and the default-fetch binding detail, which the answer does not mention.",
+      "judge_cost_usd": 0.020928,
+      "error": null
+    },
+    {
+      "id": "retry-after-header",
+      "kind": "answerable",
+      "type": "multi-file",
+      "question": "How does ky honor a server's Retry-After or rate-limit headers when deciding how long to wait?",
+      "outcome": "completed",
+      "answer": "When a retried HTTP error carries a server timing header, ky waits for the time the server asks for. It caps that wait at `retry.maxRetryAfter` and adds no jitter. Two conditions apply: the response status must be in `retry.afterStatusCodes`, and the header must be readable. Otherwise ky falls back to its usual backoff delay.\n\n**1. Which header is used** (`source/core/retry-timing.ts:25-49`). ky checks headers in this order and stops at the first one present:\n- `Retry-After`. If it's present, ky uses it and ignores the rate-limit headers (line 31).\n- `RateLimit-Reset`\n- `X-RateLimit-Retry-After` (Symfony-based services)\n- `X-RateLimit-Reset` (GitHub), then `X-Rate-Limit-Reset` (Twitter)\n\nThe two reset-style headers are marked `allowTimestamp: true`. The others are always treated as a number of seconds or a date.\n\n**2. Turning the value into milliseconds** (`source/core/retry-timing.ts:151-173`):\n- A plain integer is read as seconds and multiplied by 1000. For reset headers, a value of at least `1_000_000_000` (2001-09-09) is read as a Unix epoch time, so ky subtracts `Date.now()` (lines 1-2, 156-161).\n- Anything else is parsed as an HTTP date. Only IMF-fixdate, RFC 850 and asctime formats are accepted (lines 6-9, 88-149). The delay is `timestamp - Date.now()`.\n- The result is never below 0. A value it can't parse returns `undefined`.\n\n**3. Applying it in the retry decision** (`source/core/Ky.ts:733-755`):\n```ts\nconst retryTimingHeader = getRetryTimingHeader(error.response.headers);\nif (retryTimingHeader && retry.afterStatusCodes.includes(error.response.status)) {\n\tconst after = calculateRetryTimingDelay(retryTimingHeader);\n\tif (after === undefined) {\n\t\treturn this.#calculateDelay(retry, error);\n\t}\n\t// Don't apply jitter when server provides explicit retry timing\n\treturn Math.min(retry.maxRetryAfter, after);\n}\n```\n- A malformed header doesn't stop the retry. ky just uses the normal computed delay instead (lines 741-744).\n- The header is only looked at once the error is already eligible for retry. That means its status is in `retry.statusCodes`, or a `shouldRetry` hook returned `true` (line 734).\n\n**Related options** (`source/types/retry.ts`):\n- `maxRetryAfter` defaults to `Infinity` and caps the header-based delay (lines 53-58).\n- `backoffLimit` only limits the computed backoff delay, not a delay that comes from a header (lines 60-63).\n- If `shouldRetry` returns `true`, the header timing and `maxRetryAfter` still apply, without jitter, for statuses in `afterStatusCodes` (lines 151-154).",
+      "iterations": 4,
+      "tool_calls": [
+        "search_code",
+        "read_file",
+        "search_code",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/core/retry-timing.ts",
+        "source/core/Ky.ts",
+        "source/types/retry.ts"
+      ],
+      "evidence_recall": 1.0,
+      "cost_usd": 0.098465,
+      "latency_s": 16.7,
+      "faithfulness": 5,
+      "correctness": 4,
+      "unsupported_claims": [],
+      "rationale": "Every claim is backed by the evidence: the header order, the parsing rules, the Ky.ts logic, the malformed-header fallback, the maxRetryAfter cap with no jitter, and the backoffLimit and shouldRetry notes. The answer matches the gist on all points except the 413 behavior. It never says a 413 is retried only when a timing header is present, unless shouldRetry returns true. Line 750 in Ky.ts shows this, so the omission costs a point on correctness.",
+      "judge_cost_usd": 0.025876,
+      "error": null
+    },
+    {
+      "id": "kubernetes-ingress",
+      "kind": "not_found",
+      "type": "not-found",
+      "question": "How do I configure a Kubernetes ingress controller with TLS termination?",
+      "outcome": "not_found",
+      "answer": "I couldn\u2019t find this in the repository, so I can\u2019t answer it from the code. If you expected it to be here, try naming a file, function or feature, or ask about another part of the codebase.",
+      "iterations": 2,
+      "tool_calls": [
+        "search_code"
+      ],
+      "cited_files": [],
+      "evidence_recall": null,
+      "cost_usd": 0.012267,
+      "latency_s": 4.8,
+      "faithfulness": null,
+      "correctness": null,
+      "unsupported_claims": [],
+      "rationale": "",
+      "judge_cost_usd": 0.0,
+      "error": null
+    },
+    {
+      "id": "world-cup-winner",
+      "kind": "not_found",
+      "type": "not-found",
+      "question": "Who won the 2018 FIFA World Cup?",
+      "outcome": "not_found",
+      "answer": "I couldn\u2019t find this in the repository, so I can\u2019t answer it from the code. If you expected it to be here, try naming a file, function or feature, or ask about another part of the codebase.",
+      "iterations": 1,
+      "tool_calls": [],
+      "cited_files": [],
+      "evidence_recall": null,
+      "cost_usd": 0.002874,
+      "latency_s": 2.4,
+      "faithfulness": null,
+      "correctness": null,
+      "unsupported_claims": [],
+      "rationale": "",
+      "judge_cost_usd": 0.0,
+      "error": null
+    },
+    {
+      "id": "postgres-vacuum",
+      "kind": "not_found",
+      "type": "not-found",
+      "question": "How does PostgreSQL decide when to run autovacuum on a table?",
+      "outcome": "not_found",
+      "answer": "I couldn\u2019t find this in the repository, so I can\u2019t answer it from the code. If you expected it to be here, try naming a file, function or feature, or ask about another part of the codebase.",
+      "iterations": 2,
+      "tool_calls": [
+        "search_code"
+      ],
+      "cited_files": [],
+      "evidence_recall": null,
+      "cost_usd": 0.011302,
+      "latency_s": 4.9,
+      "faithfulness": null,
+      "correctness": null,
+      "unsupported_claims": [],
+      "rationale": "",
+      "judge_cost_usd": 0.0,
+      "error": null
+    },
+    {
+      "id": "react-use-effect",
+      "kind": "not_found",
+      "type": "not-found",
+      "question": "When does React run the cleanup function of a useEffect hook?",
+      "outcome": "not_found",
+      "answer": "I couldn\u2019t find this in the repository, so I can\u2019t answer it from the code. If you expected it to be here, try naming a file, function or feature, or ask about another part of the codebase.",
+      "iterations": 2,
+      "tool_calls": [
+        "search_code"
+      ],
+      "cited_files": [],
+      "evidence_recall": null,
+      "cost_usd": 0.01258,
+      "latency_s": 4.6,
+      "faithfulness": null,
+      "correctness": null,
+      "unsupported_claims": [],
+      "rationale": "",
+      "judge_cost_usd": 0.0,
+      "error": null
+    },
+    {
+      "id": "graphql-batching",
+      "kind": "not_found",
+      "type": "not-found",
+      "question": "How does ky batch multiple GraphQL queries into a single request?",
+      "outcome": "not_found",
+      "answer": "I couldn\u2019t find this in the repository, so I can\u2019t answer it from the code. If you expected it to be here, try naming a file, function or feature, or ask about another part of the codebase.",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "search_code"
+      ],
+      "cited_files": [],
+      "evidence_recall": null,
+      "cost_usd": 0.043648,
+      "latency_s": 8.0,
+      "faithfulness": null,
+      "correctness": null,
+      "unsupported_claims": [],
+      "rationale": "",
+      "judge_cost_usd": 0.0,
+      "error": null
+    },
+    {
+      "id": "cookie-jar",
+      "kind": "not_found",
+      "type": "not-found",
+      "question": "How do I enable ky's built-in cookie jar so cookies from responses are stored and sent automatically on later requests in Node.js?",
+      "outcome": "not_found",
+      "answer": "I couldn\u2019t find this in the repository, so I can\u2019t answer it from the code. If you expected it to be here, try naming a file, function or feature, or ask about another part of the codebase.",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "search_code",
+        "search_code"
+      ],
+      "cited_files": [],
+      "evidence_recall": null,
+      "cost_usd": 0.060736,
+      "latency_s": 10.6,
+      "faithfulness": null,
+      "correctness": null,
+      "unsupported_claims": [],
+      "rationale": "",
+      "judge_cost_usd": 0.0,
+      "error": null
+    },
+    {
+      "id": "request-deduplication",
+      "kind": "not_found",
+      "type": "not-found",
+      "question": "How does ky deduplicate concurrent identical GET requests so only one goes over the network?",
+      "outcome": "not_found",
+      "answer": "I couldn\u2019t find this in the repository, so I can\u2019t answer it from the code. If you expected it to be here, try naming a file, function or feature, or ask about another part of the codebase.",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "search_code",
+        "search_code"
+      ],
+      "cited_files": [],
+      "evidence_recall": null,
+      "cost_usd": 0.050825,
+      "latency_s": 10.6,
+      "faithfulness": null,
+      "correctness": null,
+      "unsupported_claims": [],
+      "rationale": "",
+      "judge_cost_usd": 0.0,
+      "error": null
+    },
+    {
+      "id": "xml-response-parsing",
+      "kind": "not_found",
+      "type": "not-found",
+      "question": "How do I use ky's XML shortcut method to parse a response into an object?",
+      "outcome": "completed",
+      "answer": "Ky has no XML shortcut method. The response promise type lists every shortcut it adds, and these are all of them: `arrayBuffer`, `blob`, `formData`, `bytes`, `json` and `text` (`source/types/ResponsePromise.ts:9-71`). A test of the `Accept` headers that Ky sets for each shortcut covers the same list, with no XML entry (`test/response-consumption.ts:253-261`).\n\nTo get an object from an XML response, use `.text()` and pass the string to an XML parser of your choice. Ky doesn't include one, so that part is up to you:\n\n```ts\nconst xmlString = await ky('https://example.com/feed.xml').text();\n// then parse xmlString with your own XML parser\n```\n\nLike the other shortcuts, `.text()` throws an `HTTPError` if the status is outside 200\u2013299. When you call it this way, Ky sets an `Accept` header that matches the method, which is `text/*` for `.text()` (`source/types/ResponsePromise.ts:2`, `test/response-consumption.ts:255`). If your server expects something like `application/xml`, set the `Accept` header yourself.",
+      "iterations": 3,
+      "tool_calls": [
+        "search_code",
+        "read_file"
+      ],
+      "cited_files": [
+        "source/types/ResponsePromise.ts",
+        "test/response-consumption.ts"
+      ],
+      "evidence_recall": null,
+      "cost_usd": 0.036731,
+      "latency_s": 9.2,
+      "faithfulness": null,
+      "correctness": null,
+      "unsupported_claims": [],
+      "rationale": "",
+      "judge_cost_usd": 0.0,
+      "error": null
+    }
+  ]
+}

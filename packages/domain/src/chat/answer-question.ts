@@ -13,12 +13,13 @@ import type {
   ToolResult,
 } from '../ports/language-model';
 import type { LlmCallLog } from '../ports/llm-call-log';
-import type { CitableSource } from '../tools/tool';
+import type { RetrievalMode } from '../ports/retriever';
+import type { CitableSource, ToolContext } from '../tools/tool';
 import type { ToolExecution, ToolRegistry } from '../tools/tool-registry';
 import { resolveCitations } from './citations';
 import { CITATIONS_OPEN, parseFinalAnswer, validateCitations } from './final-answer';
 import { ContextBudget, type Admission, type ContextBudgetLimits } from './context-budget';
-import { SessionNotFoundError } from './errors';
+import { SessionNotFoundError, UnknownPromptVersionError } from './errors';
 import type { LoopOutcome, LoopPolicy, LoopState } from './loop-policy';
 import type { SystemPrompt } from './system-prompt';
 
@@ -84,6 +85,10 @@ export const CANCELLED_ANSWER =
 export interface AnswerQuestionInput {
   sessionId: string;
   question: string;
+  /** Another loaded prompt version for this question (e.g. "v3"); the default prompt when absent. */
+  promptVersion?: string;
+  /** Retrieval mode for the search tools on this question; their default when absent. */
+  retrievalMode?: RetrievalMode;
 }
 
 export interface AnswerQuestionOptions {
@@ -101,7 +106,10 @@ export interface AnswerQuestionDeps {
   model: LanguageModel;
   tools: ToolRegistry;
   llmCalls: LlmCallLog;
+  /** The default system prompt. */
   prompt: SystemPrompt;
+  /** Other versions of the same prompt a question may ask for (AnswerQuestionInput.promptVersion). */
+  otherPrompts?: readonly SystemPrompt[];
   policy: LoopPolicy;
   /** Limits of the ContextBudget each question gets for its tool results. */
   contextBudget: ContextBudgetLimits;
@@ -195,14 +203,20 @@ export class AnswerQuestion {
   }
 
   async execute(
-    { sessionId, question }: AnswerQuestionInput,
+    { sessionId, question, promptVersion, retrievalMode }: AnswerQuestionInput,
     { onEvent, signal }: AnswerQuestionOptions = {},
   ): Promise<AnswerQuestionResult> {
-    const { chats, tools, policy, prompt } = this.deps;
+    const { chats, tools, policy } = this.deps;
+    const prompt = this.promptFor(promptVersion);
+    const toolContext: ToolContext = {
+      repoId: '',
+      ...(retrievalMode !== undefined && { retrievalMode }),
+    };
     const emit = (event: ChatStreamEvent) => onEvent?.(event);
 
     const session = await chats.findSession(sessionId);
     if (!session) throw new SessionNotFoundError(sessionId);
+    toolContext.repoId = session.repoId;
     const history = await chats.listMessages(sessionId);
     await chats.addUserMessage(sessionId, question);
 
@@ -232,6 +246,7 @@ export class AnswerQuestion {
       try {
         response = await this.callModel(
           sessionId,
+          prompt.id,
           { system, messages, tools: toolDefinitions, allowToolCalls },
           { signal, onTextDelta: (text) => emit({ type: 'token', iteration, text }) },
         );
@@ -307,7 +322,7 @@ export class AnswerQuestion {
         toolCalls: response.toolCalls,
         providerContent: response.providerContent,
       });
-      const outcomes = await this.runTools(response, iteration, session.repoId, budget, emit);
+      const outcomes = await this.runTools(response, iteration, toolContext, budget, emit);
       for (const { trace, citations } of outcomes) {
         traces.push(trace);
         retrieved.push(...citations);
@@ -382,7 +397,7 @@ export class AnswerQuestion {
   private async runTools(
     response: ModelResponse,
     iteration: number,
-    repoId: string,
+    context: ToolContext,
     budget: ContextBudget,
     emit: (event: ChatStreamEvent) => void,
   ): Promise<ToolOutcome[]> {
@@ -391,7 +406,7 @@ export class AnswerQuestion {
     }
     return Promise.all(
       response.toolCalls.map(async (call) => {
-        const execution = await this.deps.tools.execute(call.name, call.input, { repoId });
+        const execution = await this.deps.tools.execute(call.name, call.input, context);
         const admission = budget.admit(
           execution.ok ? JSON.stringify(execution.output) : execution.error,
         );
@@ -410,9 +425,26 @@ export class AnswerQuestion {
     );
   }
 
+  /** Throws UnknownPromptVersionError unless `version` is absent or loaded: lets callers fail fast. */
+  assertPromptVersion(version: string | undefined): void {
+    this.promptFor(version);
+  }
+
+  /** The prompt a question asked for, or the default. Throws for a version that isn't loaded. */
+  private promptFor(version: string | undefined): SystemPrompt {
+    const { prompt, otherPrompts = [] } = this.deps;
+    if (version === undefined || version === prompt.version) return prompt;
+    const other = otherPrompts.find((p) => p.version === version);
+    if (!other) {
+      throw new UnknownPromptVersionError(version, [prompt, ...otherPrompts].map((p) => p.version));
+    }
+    return other;
+  }
+
   /** One model call, logged whether it succeeds, fails or is aborted. */
   private async callModel(
     sessionId: string,
+    promptId: string,
     request: {
       system: string;
       messages: ConversationMessage[];
@@ -421,12 +453,12 @@ export class AnswerQuestion {
     },
     options: { signal?: AbortSignal; onTextDelta: (text: string) => void },
   ): Promise<ModelResponse> {
-    const { model, llmCalls, prompt } = this.deps;
+    const { model, llmCalls } = this.deps;
     const started = this.clock.now();
     const base = {
       sessionId,
       purpose: ANSWER_QUESTION_PURPOSE,
-      promptVersion: prompt.id,
+      promptVersion: promptId,
     };
     try {
       // A copy: the loop keeps appending to `messages` after this call.

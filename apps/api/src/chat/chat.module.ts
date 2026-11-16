@@ -22,7 +22,7 @@ import { PrismaRepoStore } from '../infrastructure/prisma/prisma-repo-store';
 import { PrismaSourceFileReader } from '../infrastructure/prisma/prisma-source-file-reader';
 import { SearchModule } from '../search/search.module';
 import { ANSWER_QUESTION_PROMPT } from './chat.constants';
-import { loadPrompt } from './prompt-loader';
+import { loadPrompt, loadPromptVersions } from './prompt-loader';
 import { SessionsController } from './sessions.controller';
 
 /** Q&A sessions: the agent loop, the model adapter and their stores. */
@@ -95,6 +95,10 @@ import { SessionsController } from './sessions.controller';
           prompt: loadPrompt(
             ANSWER_QUESTION_PROMPT.name,
             ANSWER_QUESTION_PROMPT.version,
+          ),
+          // Older versions stay loadable per question (promptVersion), for evals.
+          otherPrompts: loadPromptVersions(ANSWER_QUESTION_PROMPT.name).filter(
+            (p) => p.version !== ANSWER_QUESTION_PROMPT.version,
           ),
           policy: new LoopPolicy({
             maxIterations: config.CHAT_MAX_ITERATIONS,

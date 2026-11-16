@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { loadPrompt } from './prompt-loader';
+import { loadPrompt, loadPromptVersions } from './prompt-loader';
 import { ANSWER_QUESTION_PROMPT } from './chat.constants';
 
 describe('loadPrompt', () => {
@@ -37,6 +37,24 @@ describe('loadPrompt', () => {
       '## v1\n\n- First. Mentions v2 in passing.\n',
     );
     expect(() => loadPrompt('demo', 'v2', [root])).toThrow(/no "## v2" entry/);
+  });
+
+  it('lists every version with a changelog entry and a file', () => {
+    writeFileSync(
+      join(root, 'prompts', 'demo', 'CHANGELOG.md'),
+      [
+        '## v2',
+        '- Second.',
+        '## v1',
+        '- First.',
+        '## v9',
+        '- Planned, no file yet.',
+      ].join('\n'),
+    );
+    expect(loadPromptVersions('demo', [root]).map((p) => p.id)).toEqual([
+      'demo@v2',
+      'demo@v1',
+    ]);
   });
 
   it('refuses a missing prompt file', () => {

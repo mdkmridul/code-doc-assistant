@@ -37,4 +37,5 @@ export * from './chat/errors';
 export * from './chat/get-session';
 export * from './chat/loop-policy';
 export * from './chat/start-session';
+export * from './search/search-repository';
 export * from './chat/system-prompt';

@@ -15,6 +15,7 @@ import {
 import {
   AnswerQuestion,
   GetSession,
+  RETRIEVAL_MODES,
   StartSession,
   type AnswerQuestionResult,
   type SessionTranscript,
@@ -27,7 +28,16 @@ import { MAX_QUESTION_CHARS } from './chat.constants';
 
 const createSessionBody = z.object({ repoId: z.uuid() }).strict();
 const postMessageBody = z
-  .object({ content: z.string().trim().min(1).max(MAX_QUESTION_CHARS) })
+  .object({
+    content: z.string().trim().min(1).max(MAX_QUESTION_CHARS),
+    /** Run this question on another loaded prompt version, e.g. "v3" (evals). */
+    promptVersion: z
+      .string()
+      .regex(/^v\d+$/)
+      .optional(),
+    /** Retrieval mode for search_code on this question (evals); the server default otherwise. */
+    retrievalMode: z.enum(RETRIEVAL_MODES).optional(),
+  })
   .strict();
 
 function parse<T>(schema: z.ZodType<T>, body: unknown): T {
@@ -69,7 +79,7 @@ export class SessionsController {
   }
 
   /**
-   * `{"content": "<question>"}` → 200 with the full answer once the agent loop
+   * `{"content": "<question>", "promptVersion"?, "retrievalMode"?}` → 200 with the full answer once the agent loop
    * finishes (no streaming yet). 404 unknown session, 502 model failure.
    */
   @Post(':id/messages')
@@ -78,8 +88,12 @@ export class SessionsController {
     @Param('id', new ParseUUIDPipe()) sessionId: string,
     @Body() body: unknown,
   ): Promise<AnswerQuestionResult> {
-    const { content } = parse(postMessageBody, body);
-    return this.answerQuestion.execute({ sessionId, question: content });
+    const { content, ...options } = parse(postMessageBody, body);
+    return this.answerQuestion.execute({
+      sessionId,
+      question: content,
+      ...options,
+    });
   }
 
   /**
@@ -95,15 +109,16 @@ export class SessionsController {
     @Body() body: unknown,
     @Res() res: Response,
   ): Promise<void> {
-    const { content } = parse(postMessageBody, body);
+    const { content, ...options } = parse(postMessageBody, body);
     await this.getSession.execute(sessionId); // 404 before streaming
+    this.answerQuestion.assertPromptVersion(options.promptVersion); // 400 before streaming
 
     const sse = openSse(res);
     const disconnect = new AbortController();
     sse.onClose(() => disconnect.abort());
     try {
       await this.answerQuestion.execute(
-        { sessionId, question: content },
+        { sessionId, question: content, ...options },
         { onEvent: (event) => sse.send(event), signal: disconnect.signal },
       );
     } catch (error) {

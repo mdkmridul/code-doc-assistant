@@ -1,0 +1,523 @@
+# Golden set for ky at a pinned commit. See evals/README.md.
+repo:
+  name: ky
+  url: https://github.com/sindresorhus/ky
+  commit: 3541888878c4d303a8bc2ad61815f4e048f55a5d
+questions:
+  # ---------------------------------------------------------------------------
+  # Identifier questions: name a symbol, option, class or hook as written in code
+  # ---------------------------------------------------------------------------
+
+  # verified: source/errors/ForceRetryError.ts:6-51
+  - id: force-retry-error
+    kind: answerable
+    type: identifier
+    question: What is `ForceRetryError` and what information does it carry?
+    expected_files:
+      - source/errors/ForceRetryError.ts
+    expected_symbols: [ForceRetryError, customDelay, customRequest]
+    gist: >-
+      ForceRetryError extends KyError and is created when an afterResponse hook returns `ky.retry()`;
+      it is observable in beforeRetry and beforeError hooks. Its message is 'Forced retry', or
+      'Forced retry: <code>' when a code is given, and it stores the options as `customDelay`,
+      `code` and `customRequest`, with a non-Error `cause` wrapped in NonError. The constructor
+      throws a TypeError for null options, a delay that is not a non-negative number, a non-string
+      code, or a request that is not a Request.
+
+  # verified: source/utils/body.ts:6-8, 166-198
+  - id: max-response-size-limit
+    kind: answerable
+    type: identifier
+    question: How does `limitResponseSize` enforce the `maxResponseSize` option?
+    expected_files:
+      - source/utils/body.ts
+    expected_symbols: [limitResponseSize, ResponseSizeError, nullBodyStatuses]
+    gist: >-
+      It pipes the response body through a TransformStream that counts the bytes of each chunk and,
+      once the running total exceeds maxResponseSize, throws a ResponseSizeError (which errors the
+      stream). It returns the response untouched when the limit is Infinity or the body cannot be
+      wrapped: no body, body already used or locked, or a null-body status (101, 103, 204, 205, 304).
+      The wrapped Response keeps the original url, redirected, type and headers, and body methods
+      rethrow the size error instead of a generic TypeError.
+
+  # verified: source/core/Ky.ts:392-395, 600-604, 1202-1205
+  - id: ky-stop-before-retry
+    kind: answerable
+    type: identifier
+    question: What happens when a `beforeRetry` hook returns `ky.stop`?
+    expected_files:
+      - source/core/Ky.ts
+    expected_symbols: [stop, missingResponseMessage]
+    gist: >-
+      Retrying stops immediately without throwing: the remaining beforeRetry hooks are skipped and
+      the retry path returns undefined, so the request promise resolves with no response. Calling a
+      body shortcut such as `.json()` afterwards throws a TypeError explaining that the request
+      resolved without a response because a beforeRetry hook returned `ky.stop`, and suggests
+      throwing from the hook instead.
+
+  # verified: source/types/options.ts:212-246
+  - id: timeout-vs-total-timeout
+    kind: answerable
+    type: identifier
+    question: What is the difference between the `timeout` and `totalTimeout` options?
+    expected_files:
+      - source/types/options.ts
+    expected_symbols: [timeout, totalTimeout]
+    gist: >-
+      `timeout` is a per-attempt timeout (default 10000 ms) applied independently to each retry, and
+      the body shortcut methods also use it as a separate timeout for reading the body; `false`
+      disables it. `totalTimeout` (default false, meaning none) bounds the whole operation including
+      retries and delays and throws a TimeoutError when exceeded. Both must be a non-negative number
+      or false (otherwise TypeError), and values above 2147483647, Infinity included, throw a RangeError.
+
+  # verified: source/utils/merge.ts:6-61, 198-216
+  - id: replace-option
+    kind: answerable
+    type: identifier
+    question: What does `replaceOption` do when extending an instance?
+    expected_files:
+      - source/utils/merge.ts
+    expected_symbols: [replaceOption, replaceSymbol, getReplaceState]
+    gist: >-
+      `replaceOption(value)` wraps a value in a marker object (keyed by `Symbol.for('ky.replaceOption')`)
+      so that `ky.extend()` replaces the parent's value instead of deep-merging with it. It works for
+      hooks (including a single hook type such as beforeRequest), headers, search parameters, context
+      and other deep-merged options; for example wrapped beforeRequest hooks become only the new list
+      rather than being appended to the parent's hooks.
+
+  # verified: source/core/Ky.ts:63, 469-471
+  - id: prefix-url-renamed
+    kind: answerable
+    type: identifier
+    question: What happens if I still pass the `prefixUrl` option?
+    expected_files:
+      - source/core/Ky.ts
+    expected_symbols: [prefixUrlRenamedErrorMessage, prefixUrl]
+    gist: >-
+      The Ky constructor checks whether the options own a `prefixUrl` key and throws an Error saying
+      that `prefixUrl` was renamed to `prefix` in v2 (and now allows slashes in input), pointing to the
+      new `baseUrl` option for standard URL resolution. Through `ky()` the error rejects the returned
+      promise rather than being silently ignored.
+
+  # verified: source/core/Ky.ts:782-812
+  - id: before-error-hook-flow
+    kind: answerable
+    type: identifier
+    question: How are `beforeError` hooks applied to an error before ky throws it?
+    expected_files:
+      - source/core/Ky.ts
+    expected_symbols: [beforeError, throwProcessedError]
+    gist: >-
+      `#throwProcessedError` runs the beforeError hooks in order, awaiting each with
+      `{request, options, error, retryCount}`, and if a hook returns an Error (including a
+      cross-realm one) that becomes the error passed to the next hook and finally thrown; other return
+      values are ignored. Non-Error thrown values pass through unchanged without running the hooks, and
+      errors thrown by beforeRetry hooks are rethrown as-is, bypassing beforeError.
+
+  # verified: source/core/Ky.ts:765-780, 1007-1011
+  - id: parse-json-option
+    kind: answerable
+    type: identifier
+    question: How is the custom `parseJson` option used when reading a response?
+    expected_files:
+      - source/core/Ky.ts
+    expected_symbols: [parseJson, decorateResponse]
+    gist: >-
+      `#parseJson` calls `parseJson(text, {request, response})` when the option is set and
+      `JSON.parse(text)` otherwise. When parseJson is set, `#decorateResponse` replaces the response's
+      `json()` method (and `clone()`, so clones keep it) so that even calling `.json()` on an awaited
+      Response uses the custom parser. The same parser is used by the `.json()` shortcut and when
+      filling HTTPError.data for JSON error bodies.
+
+  # verified: source/core/Ky.ts:724-731; source/utils/normalize.ts:34
+  - id: retry-on-timeout
+    kind: answerable
+    type: identifier
+    question: Does ky retry a request that failed with a `TimeoutError`, and what does `retryOnTimeout` change?
+    expected_files:
+      - source/core/Ky.ts
+    expected_symbols: [retryOnTimeout, isTimeoutError]
+    gist: >-
+      By default timeouts are not retried: `retry.retryOnTimeout` defaults to false and a TimeoutError
+      is rethrown. If retryOnTimeout is true, or a `shouldRetry` function returns exactly true, the
+      timeout is retried using the normal computed backoff delay (subject to the retry limit and
+      allowed methods). After a timeout the aborted AbortController is replaced with a fresh one before
+      the next attempt.
+
+  # verified: source/errors/HTTPError.ts:6-33
+  - id: http-error-data
+    kind: answerable
+    type: identifier
+    question: What does the `data` property of `HTTPError` contain, and why does `error.response.json()` fail?
+    expected_files:
+      - source/errors/HTTPError.ts
+    expected_symbols: [HTTPError, data]
+    gist: >-
+      HTTPError is thrown for non-2xx responses when throwHttpErrors is enabled and has `response`,
+      `request`, `options` and `data`. `data` is the pre-parsed body: JSON (via parseJson or JSON.parse)
+      for JSON content types, otherwise text, and undefined if the body is empty, unreadable, too
+      large, unparsable or times out; reading is bounded by the request timeout (or 10 seconds when
+      timeout is disabled), the remaining totalTimeout and a 10 MiB limit. Because the body is consumed
+      to fill `data`, body methods on `error.response` no longer work. The message is
+      'Request failed with status code <status>: <METHOD> <url>'.
+
+  # verified: source/utils/type-guards.ts:8-39; source/errors/KyError.ts:1-14
+  - id: is-ky-error-guard
+    kind: answerable
+    type: identifier
+    question: How does `isKyError` decide whether an error came from ky, and does it match `SchemaValidationError`?
+    expected_files:
+      - source/utils/type-guards.ts
+    expected_symbols: [isKyError, isErrorType]
+    gist: >-
+      `isKyError` returns true when `error.isKyError === true`, a brand getter defined on the KyError
+      base class, so it also works across realms where instanceof fails. The specific guards
+      (isHTTPError, isNetworkError, isTimeoutError, isForceRetryError, isResponseSizeError) use
+      instanceof or the isKyError brand plus a matching `name`. SchemaValidationError deliberately does
+      not extend KyError, so isKyError does not match it.
+
+  # verified: source/core/Ky.ts:311-327, 349-357
+  - id: init-hook-options
+    kind: answerable
+    type: identifier
+    question: How do `init` hooks receive and modify the options?
+    expected_files:
+      - source/core/Ky.ts
+    expected_symbols: [cloneInitHookOptions, init]
+    gist: >-
+      In `Ky.create`, init hooks run synchronously (not awaited), in order, before the Ky instance and
+      Request are built, each mutating the same options object in place. When there is at least one
+      init hook, `cloneInitHookOptions` first gives them copies so mutations don't leak across requests:
+      headers as a plain object with lowercase names, a shallow copy of context, a deep clone of json and
+      retry, and a cloned searchParams; other values such as the body are kept by reference.
+
+  # ---------------------------------------------------------------------------
+  # Conceptual questions: plain language, no identifiers
+  # ---------------------------------------------------------------------------
+
+  # verified: source/utils/timeout.ts:10-46; source/core/Ky.ts:218
+  - id: request-takes-too-long
+    kind: answerable
+    type: conceptual
+    question: What happens when a request takes too long to get a response?
+    expected_files:
+      - source/utils/timeout.ts
+    expected_symbols: [timeout, TimeoutError]
+    gist: >-
+      Each attempt races fetch against a setTimeout (10 seconds by default). If the timer fires first,
+      ky aborts the request's AbortController and rejects with a TimeoutError carrying the request. A
+      response that arrives after the timeout won is discarded and its body cancelled, and the timer is
+      always cleared in a finally block so it cannot abort a later retry.
+
+  # verified: source/utils/is-network-error.ts:4-46; source/core/Ky.ts:1268-1270
+  - id: network-error-detection
+    kind: answerable
+    type: conceptual
+    question: How does ky tell a dropped connection apart from other errors thrown by fetch?
+    expected_files:
+      - source/utils/is-network-error.ts
+    expected_symbols: [isRawNetworkError, errorMessages]
+    gist: >-
+      It only treats an error as a network error if it is a TypeError whose message matches known
+      runtime-specific messages: 'Failed to fetch' (optionally with a hostname in parentheses) for
+      Chrome, 'NetworkError when attempting to fetch resource.' for Firefox, 'fetch failed' and
+      'terminated' for undici/Node.js, Deno's 'error sending request for url' prefix, and others for
+      Safari, Bun, cross-fetch and Cloudflare Workers. Safari's generic 'Load failed' only counts when the
+      error has no stack (or was captured by Sentry). Such errors are wrapped in NetworkError; anything
+      else is not treated as a network error.
+
+  # verified: source/utils/normalize.ts:17-35
+  - id: default-retry-policy
+    kind: answerable
+    type: conceptual
+    question: Which HTTP methods and status codes are retried by default, and how many times?
+    expected_files:
+      - source/utils/normalize.ts
+    expected_symbols: [defaultRetryOptions, retryMethods, retryStatusCodes]
+    gist: >-
+      By default ky retries up to 2 times, only for the methods get, put, head, delete, options, trace
+      and query (not post or patch), and for status codes 408, 413, 429, 500, 502, 503 and 504.
+      Retry timing headers are honored for 413, 429 and 503, maxRetryAfter and backoffLimit default to
+      Infinity, jitter is off and timeouts are not retried.
+
+  # verified: source/utils/body.ts:28-110, 216-242; source/core/constants.ts:66
+  - id: upload-progress
+    kind: answerable
+    type: conceptual
+    question: How can I track the progress of a large file upload, and how is the total size estimated?
+    expected_files:
+      - source/utils/body.ts
+    expected_symbols: [streamRequest, getBodySize, withProgress]
+    gist: >-
+      With the onUploadProgress option ky rebuilds the Request with its body piped through a
+      TransformStream that calls the callback with `{percent, transferredBytes, totalBytes}` and the
+      chunk. The total comes from the original body: Blob size, byteLength for buffers, encoded length
+      for strings and URLSearchParams, and an approximation for FormData using a 40-byte boundary;
+      a stream falls back to a declared content-length. Percent is held just below 1 until the stream
+      finishes, when a final event reports 1. Upload progress is skipped for keepalive or no-cors
+      requests and for bodies already used or locked.
+
+  # verified: source/index.ts:33-58
+  - id: create-vs-extend
+    kind: answerable
+    type: conceptual
+    question: What is the difference between creating a fresh instance and extending an existing one?
+    expected_files:
+      - source/index.ts
+    expected_symbols: [createInstance, validateAndMerge]
+    gist: >-
+      The default export is an instance built by `createInstance()` with no defaults. `ky.create(defaults)`
+      makes a new instance from only the given defaults, while `ky.extend(defaults)` merges the new
+      defaults on top of the parent's with validateAndMerge. `extend` also accepts a function that
+      receives a deep copy of the parent's defaults and returns the new ones. Every instance gets the
+      shortcut methods (get, post, put, patch, head, delete, query) plus `stop` and `retry`.
+
+  # verified: source/utils/merge.ts:73-86, 169-196
+  - id: header-merging
+    kind: answerable
+    type: conceptual
+    question: How are headers combined when both the instance defaults and a request set them, and how do I remove an inherited header?
+    expected_files:
+      - source/utils/merge.ts
+    expected_symbols: [mergeHeaders, mergeHeaderContainers, toHeaderObject]
+    gist: >-
+      Header sources are converted to plain objects and merged with names lowercased, so later sources
+      override earlier ones regardless of spelling. A header set to `undefined` in a plain object is a
+      deletion marker that removes the inherited header; since a Headers instance can't hold undefined,
+      the string 'undefined' in a Headers instance counts as a deletion instead.
+
+  # verified: source/core/Ky.ts:272-309, 547-583
+  - id: query-string-handling
+    kind: answerable
+    type: conceptual
+    question: How are query string parameters added to the request URL when the URL already has some?
+    expected_files:
+      - source/core/Ky.ts
+    expected_symbols: [applySearchParameters, deleteSearchParameter]
+    gist: >-
+      The search parameters option is appended to the parameters already in the input URL rather than
+      replacing them. A string is appended after stripping a leading '?'; a plain object appends each
+      entry, and a key whose value is undefined is removed from the input URL instead; other forms
+      go through URLSearchParams. Keys marked as deleted during option merging are removed first. The
+      Request is only rebuilt when the resulting URL actually differs, keeping options inherited from a
+      Request input.
+
+  # verified: source/utils/delay.ts:9-29; source/core/Ky.ts:1129-1143
+  - id: cancel-during-retry-wait
+    kind: answerable
+    type: conceptual
+    question: Can I cancel a request while it is waiting before its next retry?
+    expected_files:
+      - source/utils/delay.ts
+    expected_symbols: [delay]
+    gist: >-
+      Yes. The wait between retries is an abortable delay: it throws immediately if the signal is
+      already aborted, otherwise it listens for 'abort', and on abort it clears the timer and rejects
+      with the signal's reason. Ky passes the user-provided abort signal (not its internal timeout
+      controller) to this delay.
+
+  # verified: source/core/Ky.ts:1041-1063, 637-640
+  - id: mock-response-before-request
+    kind: answerable
+    type: conceptual
+    question: Can a hook skip the network entirely and return a canned response instead?
+    expected_files:
+      - source/core/Ky.ts
+    expected_symbols: [runBeforeRequestHooks, hookResponses]
+    gist: >-
+      Yes, from a beforeRequest hook. If a beforeRequest hook returns a Response, the remaining
+      beforeRequest hooks are skipped and no fetch is made; if it returns a Request, that request
+      (with ky's managed signal reattached) replaces the outgoing one and later hooks see it. A response
+      returned by a hook is used as-is: if it has a failing status it throws an HTTPError instead of
+      being retried.
+
+  # verified: source/core/Ky.ts:1065-1115, 606-647, 697-700
+  - id: retry-based-on-response-body
+    kind: answerable
+    type: conceptual
+    question: How can I inspect a successful response and make ky retry it anyway?
+    expected_files:
+      - source/core/Ky.ts
+    expected_symbols: [runAfterResponseHooks, isRetryMarker, ForceRetryError]
+    gist: >-
+      Use an afterResponse hook: each hook gets a clone of the response and can return a new Response
+      to replace it, or return `ky.retry()`, which ky turns into a ForceRetryError. A forced retry skips
+      the method check and shouldRetry but still respects the retry limit, and uses its custom delay if
+      given, otherwise the normal backoff. Any other error thrown by an afterResponse hook is fatal and
+      not retried.
+
+  # verified: source/core/Ky.ts:245-270
+  - id: url-prefix-and-base
+    kind: answerable
+    type: conceptual
+    question: How is the final request URL built when an instance has both a path prefix and a base URL?
+    expected_files:
+      - source/core/Ky.ts
+    expected_symbols: [resolveInput, isAbsoluteInput]
+    gist: >-
+      Only string inputs are changed; URL and Request inputs are used as-is. The prefix is joined first,
+      trimming trailing slashes from the prefix and leading slashes from the input and joining them with
+      one '/'. The result is then resolved against the base URL with `new URL(input, base)` only if it
+      is relative (no scheme), so absolute inputs bypass the base URL; an input like 'https:foo' without
+      '//' throws a TypeError when a base URL is set.
+
+  # documentation-only
+  # verified: readme.md:1610-1646
+  - id: http2-in-node
+    kind: answerable
+    type: conceptual
+    question: How do I make requests over HTTP/2 in Node.js?
+    expected_files:
+      - readme.md
+    expected_symbols: []
+    gist: >-
+      HTTP/2 isn't enabled by default; undici supports it. Create an undici Agent whose factory returns
+      a Pool with `allowH2: true` and pass it as the `dispatcher` option, which ky forwards to fetch.
+      It can be combined with a proxy by creating an undici ProxyAgent with `allowH2: true`.
+
+  # ---------------------------------------------------------------------------
+  # Multi-file questions: the answer spans two source files
+  # ---------------------------------------------------------------------------
+
+  # verified: source/core/Ky.ts:665-686; source/utils/normalize.ts:25-35
+  - id: retry-delay-backoff
+    kind: answerable
+    type: multi-file
+    question: How long does ky wait between retry attempts, and can that wait be randomized or capped?
+    expected_files:
+      - source/core/Ky.ts
+      - source/utils/normalize.ts
+    expected_symbols: [calculateDelay, defaultRetryOptions, backoffLimit, jitter]
+    gist: >-
+      The default delay is exponential: `0.3 * 2 ** (attemptCount - 1) * 1000` ms (300 ms, 600 ms,
+      1200 ms, ...), configurable through `retry.delay`, which must return a non-negative number or a
+      TypeError is thrown. With `jitter: true` the delay becomes a random value between 0 and the
+      computed delay; a jitter function can transform it (invalid results fall back to the unjittered
+      delay). The result is capped by `backoffLimit`, which defaults to Infinity.
+
+  # verified: source/core/Ky.ts:329-346, 406-417; source/errors/SchemaValidationError.ts:3-33
+  - id: json-schema-validation
+    kind: answerable
+    type: multi-file
+    question: How do I validate a JSON response against a schema, and what is thrown when it doesn't match?
+    expected_files:
+      - source/core/Ky.ts
+      - source/errors/SchemaValidationError.ts
+    expected_symbols: [validateJsonWithSchema, SchemaValidationError, issues]
+    gist: >-
+      Pass a Standard Schema validator (for example a Zod schema) to `.json(schema)`. Ky parses the
+      body, then calls the schema's `['~standard'].validate()`; if the value has no valid `~standard`
+      validate function it throws a TypeError. If validation returns issues, it throws a
+      SchemaValidationError ('Response schema validation failed') whose `issues` property holds them;
+      otherwise it returns the validated value. SchemaValidationError deliberately does not extend
+      KyError.
+
+  # verified: source/core/Ky.ts:218, 1240-1252; source/utils/options.ts:5-30
+  - id: custom-fetch-and-extra-options
+    kind: answerable
+    type: multi-file
+    question: How can I plug in my own fetch implementation or pass extra fetch-only options like an undici dispatcher?
+    expected_files:
+      - source/core/Ky.ts
+      - source/utils/options.ts
+    expected_symbols: [findUnknownOptions, withAttemptDefaults]
+    gist: >-
+      The `fetch` option replaces the fetch function (default `globalThis.fetch` bound to globalThis);
+      ky calls it unbound as `fetch(request, init)` and throws a TypeError if it doesn't resolve with a
+      Response. The init argument is built by `findUnknownOptions`, which forwards every option that is
+      neither a standard Request option nor a ky option, so fetch-only extensions such as `dispatcher`
+      or Next.js's `next` reach fetch unchanged.
+
+  # verified: source/core/Ky.ts:733-755; source/core/retry-timing.ts:25-49, 151-173
+  - id: retry-after-header
+    kind: answerable
+    type: multi-file
+    question: How does ky honor a server's Retry-After or rate-limit headers when deciding how long to wait?
+    expected_files:
+      - source/core/Ky.ts
+      - source/core/retry-timing.ts
+    expected_symbols: [getRetryTimingHeader, calculateRetryTimingDelay, afterStatusCodes, maxRetryAfter]
+    gist: >-
+      For an HTTPError whose status is in `afterStatusCodes`, ky reads Retry-After first and, only if it
+      is missing, RateLimit-Reset, X-RateLimit-Retry-After, then X-RateLimit-Reset / X-Rate-Limit-Reset.
+      A numeric value is delay seconds, except reset headers whose value is at least 1,000,000,000 are
+      treated as Unix timestamps; HTTP-dates are also parsed, and past times give a delay of 0. The
+      header delay is capped at `maxRetryAfter` and no jitter is applied; an unparsable header falls back
+      to the normal backoff delay. A 413 is only retried when such a header is present, unless
+      shouldRetry returns true.
+
+  # ---------------------------------------------------------------------------
+  # Not-found questions
+  # ---------------------------------------------------------------------------
+
+  # off-topic
+  - id: kubernetes-ingress
+    kind: not_found
+    type: not-found
+    question: How do I configure a Kubernetes ingress controller with TLS termination?
+    expected_files: []
+    expected_symbols: []
+    gist: The repository is an HTTP client library and has nothing about Kubernetes; the assistant should say it can't find it.
+
+  # off-topic
+  - id: world-cup-winner
+    kind: not_found
+    type: not-found
+    question: Who won the 2018 FIFA World Cup?
+    expected_files: []
+    expected_symbols: []
+    gist: This is general knowledge unrelated to the repository; the assistant should say the repository doesn't contain the answer.
+
+  # off-topic
+  - id: postgres-vacuum
+    kind: not_found
+    type: not-found
+    question: How does PostgreSQL decide when to run autovacuum on a table?
+    expected_files: []
+    expected_symbols: []
+    gist: The repository has no database code or PostgreSQL documentation; the assistant should say it can't find it.
+
+  # off-topic
+  - id: react-use-effect
+    kind: not_found
+    type: not-found
+    question: When does React run the cleanup function of a useEffect hook?
+    expected_files: []
+    expected_symbols: []
+    gist: The repository is not React and documents nothing about useEffect; the assistant should say it can't find it.
+
+  # absent feature (grep of source, readme, test, test-d: no "graphql")
+  - id: graphql-batching
+    kind: not_found
+    type: not-found
+    question: How does ky batch multiple GraphQL queries into a single request?
+    expected_files: []
+    expected_symbols: []
+    gist: The repository has no GraphQL support or query batching; the assistant should say it can't find it.
+
+  # absent feature (no cookie jar; "cookie" only appears in tests checking Set-Cookie headers pass through)
+  - id: cookie-jar
+    kind: not_found
+    type: not-found
+    question: How do I enable ky's built-in cookie jar so cookies from responses are stored and sent automatically on later requests in Node.js?
+    expected_files: []
+    expected_symbols: []
+    gist: Ky has no cookie jar or cookie persistence; it only passes headers through fetch. The assistant should say the repository doesn't provide this.
+
+  # absent feature (no "dedup", "in-flight" or "coalesce" anywhere)
+  - id: request-deduplication
+    kind: not_found
+    type: not-found
+    question: How does ky deduplicate concurrent identical GET requests so only one goes over the network?
+    expected_files: []
+    expected_symbols: []
+    gist: Ky has no request deduplication or in-flight request sharing; the assistant should say it can't find it.
+
+  # absent feature (no "xml" anywhere; shortcuts are json, text, formData, arrayBuffer, blob, bytes)
+  - id: xml-response-parsing
+    kind: not_found
+    type: not-found
+    question: How do I use ky's XML shortcut method to parse a response into an object?
+    expected_files: []
+    expected_symbols: []
+    gist: Ky has no XML parsing or `.xml()` shortcut; its body shortcuts are json, text, formData, arrayBuffer, blob and bytes. The assistant should say the repository doesn't provide it.
