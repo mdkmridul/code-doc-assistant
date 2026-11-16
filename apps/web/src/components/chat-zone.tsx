@@ -32,6 +32,7 @@ const OUTCOME_NOTES: Partial<Record<NonNullable<Turn["outcome"]>, string>> = {
   truncated: "The answer was cut off at the output limit.",
   refused: "The model declined to answer.",
   cancelled: "Cancelled before it finished.",
+  not_found: "No supporting code was found in this repository.",
 };
 
 const EXAMPLES = [

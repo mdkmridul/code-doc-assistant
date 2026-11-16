@@ -1,8 +1,7 @@
 import { z } from 'zod';
 import type { Excerpt } from '../events';
-import type { Citation } from '../ports/chat-store';
 import type { ToolDefinition } from '../ports/language-model';
-import { invokeTool, ToolInputError, type Tool, type ToolContext } from './tool';
+import { invokeTool, ToolInputError, type CitableSource, type Tool, type ToolContext } from './tool';
 
 /**
  * Any tool, whatever its input and output types. Parameters are `never` so
@@ -14,7 +13,7 @@ export interface AnyTool {
   readonly description: string;
   readonly inputSchema: z.ZodType;
   execute(input: never, context: ToolContext): Promise<unknown>;
-  citations?(output: never): Citation[];
+  citations?(output: never): CitableSource[];
   summarize?(output: never): string;
   excerpts?(output: never): Excerpt[];
 }
@@ -23,7 +22,7 @@ export type ToolExecution =
   | {
       ok: true;
       output: unknown;
-      citations: Citation[];
+      citations: CitableSource[];
       summary: string;
       excerpts: Excerpt[];
     }

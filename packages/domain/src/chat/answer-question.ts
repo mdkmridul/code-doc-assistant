@@ -13,8 +13,10 @@ import type {
   ToolResult,
 } from '../ports/language-model';
 import type { LlmCallLog } from '../ports/llm-call-log';
+import type { CitableSource } from '../tools/tool';
 import type { ToolExecution, ToolRegistry } from '../tools/tool-registry';
 import { resolveCitations } from './citations';
+import { CITATIONS_OPEN, parseFinalAnswer, validateCitations } from './final-answer';
 import { ContextBudget, type Admission, type ContextBudgetLimits } from './context-budget';
 import { SessionNotFoundError } from './errors';
 import type { LoopOutcome, LoopPolicy, LoopState } from './loop-policy';
@@ -37,6 +39,43 @@ const TOKEN_BUDGET_ANSWER =
   'Try asking something narrower, for example about one feature or one directory.';
 
 const REFUSAL_ANSWER = 'I can’t help with that request.';
+
+/**
+ * The answer when the repository doesn't support one: the model said so
+ * (`found: false`), or it still cited nothing valid after one rewrite.
+ */
+export const NOT_FOUND_ANSWER =
+  'I couldn’t find this in the repository, so I can’t answer it from the code. ' +
+  'If you expected it to be here, try naming a file, function or feature, or ask about ' +
+  'another part of the codebase.';
+
+/** Sent before the one rewrite a final answer gets when its citations don't check out. */
+export const rewriteNote = (problem: string): string =>
+  `Your answer can't be accepted: ${problem}. Rewrite it now, without tools. Give the answer ` +
+  `text, then end with the ${CITATIONS_OPEN} block, citing the sourceIds of tool results from ` +
+  'this question that support it. If the repository does not contain the answer, set ' +
+  '"found": false instead.';
+
+type AnswerCheck =
+  | { kind: 'ok'; text: string; citations: Citation[]; rejected: string[] }
+  | { kind: 'not_found' }
+  | { kind: 'rewrite'; problem: string };
+
+/** Parses a final answer and validates its citations against this turn's sources. */
+function checkAnswer(raw: string, sources: ReadonlyMap<string, CitableSource>): AnswerCheck {
+  const parsed = parseFinalAnswer(raw);
+  if (!parsed.ok) return { kind: 'rewrite', problem: parsed.problem };
+  if (!parsed.meta.found) return { kind: 'not_found' };
+  const { citations, rejected } = validateCitations(parsed.meta, sources);
+  if (citations.length > 0) return { kind: 'ok', text: parsed.text, citations, rejected };
+  return {
+    kind: 'rewrite',
+    problem:
+      parsed.meta.citations.length === 0
+        ? '"found" is true but it cites no sources'
+        : `none of its citations matches a tool result from this question (${rejected.join('; ')})`,
+  };
+}
 
 /** Stored when the client goes away mid-answer, so the transcript stays question/answer pairs. */
 export const CANCELLED_ANSWER =
@@ -73,7 +112,7 @@ export interface AnswerQuestionDeps {
 interface ToolOutcome {
   result: ToolResult;
   trace: ToolCallTrace;
-  citations: Citation[];
+  citations: CitableSource[];
 }
 
 /** Keep only the locations whose file still appears in a truncated result. */
@@ -180,9 +219,37 @@ export class AnswerQuestion {
     const budget = new ContextBudget(this.deps.contextBudget);
     const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
     const traces: ToolCallTrace[] = [];
-    const retrieved: Citation[] = [];
+    /** Everything the tools showed the model this turn, by sourceId: what an answer may cite. */
+    const retrieved: CitableSource[] = [];
     let answer: string;
     let outcome: LoopOutcome;
+    let last: ModelResponse | undefined;
+
+    /** One model call, counted against the limits. Null when the caller aborted it. */
+    const call = async (allowToolCalls: boolean): Promise<ModelResponse | null> => {
+      const iteration = state.iterations + 1;
+      let response: ModelResponse;
+      try {
+        response = await this.callModel(
+          sessionId,
+          { system, messages, tools: toolDefinitions, allowToolCalls },
+          { signal, onTextDelta: (text) => emit({ type: 'token', iteration, text }) },
+        );
+      } catch (error) {
+        // An abort surfaces as whatever error the provider throws; the signal says why.
+        if (!signal?.aborted) throw error;
+        state.iterations = iteration;
+        return null;
+      }
+      state.iterations = iteration;
+      state.tokensUsed += response.usage.inputTokens + response.usage.outputTokens;
+      usage.inputTokens += response.usage.inputTokens;
+      usage.outputTokens += response.usage.outputTokens;
+      // llm_calls.cost_usd keeps 6 decimals; round so sums carry no float noise.
+      usage.costUsd = roundUsd(usage.costUsd + response.usage.costUsd);
+      last = response;
+      return response;
+    };
 
     for (;;) {
       if (signal?.aborted) {
@@ -205,30 +272,12 @@ export class AnswerQuestion {
       }
 
       const iteration = state.iterations + 1;
-      let response: ModelResponse;
-      try {
-        response = await this.callModel(
-          sessionId,
-          { system, messages, tools: toolDefinitions, allowToolCalls: step === 'call' },
-          {
-            signal,
-            onTextDelta: (text) => emit({ type: 'token', iteration, text }),
-          },
-        );
-      } catch (error) {
-        // An abort surfaces as whatever error the provider throws; the signal says why.
-        if (!signal?.aborted) throw error;
-        state.iterations = iteration;
+      const response = await call(step === 'call');
+      if (!response) {
         outcome = 'cancelled';
         answer = CANCELLED_ANSWER;
         break;
       }
-      state.iterations = iteration;
-      state.tokensUsed += response.usage.inputTokens + response.usage.outputTokens;
-      usage.inputTokens += response.usage.inputTokens;
-      usage.outputTokens += response.usage.outputTokens;
-      // llm_calls.cost_usd keeps 6 decimals; round so sums carry no float noise.
-      usage.costUsd = roundUsd(usage.costUsd + response.usage.costUsd);
       answer = response.text;
 
       if (response.stopReason === 'refusal') {
@@ -241,8 +290,10 @@ export class AnswerQuestion {
         break;
       }
       if (response.stopReason === 'max_tokens') {
-        // Tool calls cut off mid-input must not run.
+        // Tool calls cut off mid-input must not run. The text is kept as is,
+        // minus any half-written citation block.
         outcome = 'truncated';
+        answer = parseFinalAnswer(answer).text;
         break;
       }
       if (policy.isDone(response)) {
@@ -265,7 +316,43 @@ export class AnswerQuestion {
       state.contextExhausted = budget.exhausted;
     }
 
-    const { citations, unverifiedReferences } = resolveCitations(answer, retrieved);
+    // A final answer must parse and cite this turn's sources. One rewrite, then not found.
+    let citations: Citation[] = [];
+    let rejected: string[] = [];
+    if (outcome === 'completed' || outcome === 'iteration_cap' || outcome === 'context_budget') {
+      const sources = new Map(retrieved.map((source) => [source.id, source]));
+      let check = checkAnswer(answer, sources);
+      if (check.kind === 'rewrite' && last) {
+        messages.push({ role: 'assistant', text: last.text, toolCalls: [], providerContent: last.providerContent });
+        messages.push({ role: 'system_note', content: rewriteNote(check.problem) });
+        const rewrite = signal?.aborted ? null : await call(false);
+        if (!rewrite) {
+          outcome = 'cancelled';
+          answer = CANCELLED_ANSWER;
+        } else if (rewrite.stopReason === 'refusal') {
+          outcome = 'refused';
+          answer = rewrite.text.trim() === '' ? REFUSAL_ANSWER : parseFinalAnswer(rewrite.text).text;
+        } else {
+          check = checkAnswer(rewrite.text, sources);
+        }
+      }
+      if (outcome !== 'cancelled' && outcome !== 'refused') {
+        if (check.kind === 'ok') {
+          answer = check.text;
+          citations = check.citations;
+          rejected = check.rejected;
+        } else {
+          outcome = 'not_found';
+          answer = NOT_FOUND_ANSWER;
+        }
+      }
+    }
+
+    // Inline path:line references the answer text makes but no retrieved code backs.
+    const unverifiedReferences =
+      outcome === 'not_found'
+        ? []
+        : [...resolveCitations(answer, retrieved).unverifiedReferences, ...rejected];
     const stored = await chats.addAssistantMessage(sessionId, {
       content: answer,
       toolCalls: traces,

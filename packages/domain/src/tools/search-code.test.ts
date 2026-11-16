@@ -87,7 +87,8 @@ describe('SearchCodeTool', () => {
 
     const output = await invokeTool(tool, { query: 'ky' }, context);
 
-    expect(output.results.map((r) => [r.chunkId, r.score])).toEqual([
+    // The chunk id is what the model cites, as sourceId.
+    expect(output.results.map((r) => [r.sourceId, r.score])).toEqual([
       ['a', 0.812],
       ['b', 0.7],
     ]);

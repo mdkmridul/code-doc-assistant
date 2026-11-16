@@ -45,7 +45,7 @@ describe('ToolRegistry', () => {
 
     expect(execution).toMatchObject({
       ok: true,
-      citations: [{ path: 'src/a.ts', startLine: 3, endLine: 9 }],
+      citations: [{ id: 'c1', path: 'src/a.ts', startLine: 3, endLine: 9 }],
       summary: '1 result',
       excerpts: [{ path: 'src/a.ts', startLine: 3, endLine: 9, text: 'x', source: 'search' }],
     });

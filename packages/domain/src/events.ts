@@ -21,7 +21,9 @@ export type LoopOutcome =
   /** The model ran out of output tokens mid-answer. */
   | 'truncated'
   /** The client went away (e.g. closed the stream) before the answer finished. */
-  | 'cancelled';
+  | 'cancelled'
+  /** The repository doesn't answer it: the model said so, or its citations didn't check out after one rewrite. */
+  | 'not_found';
 
 /** A source location an answer relied on. */
 export interface Citation {

@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import type { Excerpt } from '../events';
-import type { Citation } from '../ports/chat-store';
 import type { SourceFileReader } from '../ports/source-file-reader';
 import { normalizePathPrefix } from './search-code';
-import type { Tool, ToolContext } from './tool';
+import { sourceIdFor } from './source-id';
+import type { CitableSource, Tool, ToolContext } from './tool';
 
 /** Most lines one call returns; enough for most functions, small enough to stay cheap. */
 export const READ_FILE_MAX_LINES = 200;
@@ -53,6 +53,8 @@ export const readFileInputSchema = z
 export type ReadFileInput = z.infer<typeof readFileInputSchema>;
 
 export interface ReadFileOutput {
+  /** What a final answer cites for these lines. */
+  sourceId: string;
   path: string;
   language: string;
   startLine: number;
@@ -130,6 +132,7 @@ export class ReadFileTool implements Tool<ReadFileInput, ReadFileOutput> {
     const content = numbered.join('\n');
 
     return {
+      sourceId: sourceIdFor('read', `${path}:${String(startLine)}-${String(endLine)}`),
       path,
       language: file.language,
       startLine,
@@ -158,7 +161,9 @@ export class ReadFileTool implements Tool<ReadFileInput, ReadFileOutput> {
     ];
   }
 
-  citations(output: ReadFileOutput): Citation[] {
-    return [{ path: output.path, startLine: output.startLine, endLine: output.endLine }];
+  citations(output: ReadFileOutput): CitableSource[] {
+    return [
+      { id: output.sourceId, path: output.path, startLine: output.startLine, endLine: output.endLine },
+    ];
   }
 }

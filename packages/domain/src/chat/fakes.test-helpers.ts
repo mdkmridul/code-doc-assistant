@@ -14,7 +14,7 @@ import type {
   ToolCall,
 } from '../ports/language-model';
 import type { LlmCallLog, LlmCallRecord } from '../ports/llm-call-log';
-import type { Tool } from '../tools/tool';
+import type { CitableSource, Tool } from '../tools/tool';
 
 /** A scripted step that never finishes on its own: it rejects only when aborted. */
 export const HANG = 'hang' as const;
@@ -70,10 +70,31 @@ export const call = (id: string, name: string, input: unknown): ToolCall => ({
 });
 
 /**
- * Answers lookups from a fixed table; cites what it returns. A key like
- * `big-3000` returns a value of 3000 × 3 characters (about 3000 estimated tokens).
+ * A scripted final answer: the text, then the `<citations>` block the loop
+ * parses. `sourceIds` are what LookupTool returns (`lk-<key>`), or invented ones.
  */
-export class LookupTool implements Tool<{ key: string }, { value: string; path: string }> {
+export const final = (
+  text: string,
+  citations: (string | { sourceId: string; lines?: [number, number] })[] = [],
+  found = true,
+): string =>
+  `${text}\n\n<citations>${JSON.stringify({
+    found,
+    citations: citations.map((c) => (typeof c === 'string' ? { sourceId: c } : c)),
+  })}</citations>`;
+
+interface LookupOutput {
+  sourceId: string;
+  path: string;
+  value: string;
+}
+
+/**
+ * Answers lookups from a fixed table; cites what it returns (src/<key>.ts
+ * lines 1-10, sourceId `lk-<key>`). A key like `big-3000` returns a value of
+ * 3000 × 3 characters (about 3000 estimated tokens).
+ */
+export class LookupTool implements Tool<{ key: string }, LookupOutput> {
   readonly name = 'lookup';
   readonly description = 'Looks a key up.';
   readonly inputSchema = z.object({ key: z.string().min(1).describe('The key') }).strict();
@@ -84,11 +105,11 @@ export class LookupTool implements Tool<{ key: string }, { value: string; path: 
     if (input.key === 'explode') return Promise.reject(new Error('backend down'));
     const big = /^big-(\d+)$/.exec(input.key);
     const value = big ? 'v'.repeat(Number(big[1]) * 3) : `value-of-${input.key}`;
-    return Promise.resolve({ value, path: `src/${input.key}.ts` });
+    return Promise.resolve({ sourceId: `lk-${input.key}`, path: `src/${input.key}.ts`, value });
   }
 
-  citations(output: { value: string; path: string }): Citation[] {
-    return [{ path: output.path, startLine: 1, endLine: 10 }];
+  citations(output: LookupOutput): CitableSource[] {
+    return [{ id: output.sourceId, path: output.path, startLine: 1, endLine: 10 }];
   }
 }
 

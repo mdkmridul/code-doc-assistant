@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SourceFileReader } from '../ports/source-file-reader';
 import type { SourceFile } from '../source-file';
 import { READ_FILE_MAX_CHARS, READ_FILE_MAX_LINES, ReadFileError, ReadFileTool } from './read-file';
+import { sourceIdFor } from './source-id';
 import { invokeTool, ToolInputError } from './tool';
 
 class FakeFiles implements SourceFileReader {
@@ -34,6 +35,7 @@ describe('ReadFileTool', () => {
     const output = await invokeTool(tool, { path: 'src/a.ts' }, context);
 
     expect(output).toEqual({
+      sourceId: sourceIdFor('read', 'src/a.ts:1-2'),
       path: 'src/a.ts',
       language: 'typescript',
       startLine: 1,
@@ -150,10 +152,15 @@ describe('ReadFileTool', () => {
     ]);
   });
 
-  it('cites exactly the lines it returned', async () => {
+  it('cites exactly the lines it returned, by a sourceId stable for that range', async () => {
     const { tool } = setup();
     const output = await invokeTool(tool, { path: 'src/a.ts', startLine: 3, endLine: 5 }, context);
-    expect(tool.citations(output)).toEqual([{ path: 'src/a.ts', startLine: 3, endLine: 5 }]);
+    const again = await invokeTool(tool, { path: 'src/a.ts', startLine: 3, endLine: 5 }, context);
+    const other = await invokeTool(tool, { path: 'src/a.ts', startLine: 3, endLine: 6 }, context);
+    expect(output.sourceId).toMatch(/^r-[0-9a-f]{8}$/);
+    expect(again.sourceId).toBe(output.sourceId);
+    expect(other.sourceId).not.toBe(output.sourceId);
+    expect(tool.citations(output)).toEqual([{ id: output.sourceId, path: 'src/a.ts', startLine: 3, endLine: 5 }]);
   });
 
   it('documents its input for the model', () => {

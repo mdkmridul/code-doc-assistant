@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { StoredEndpoint } from '../endpoints/api-endpoint';
 import type { EndpointCatalog, EndpointQuery } from '../ports/endpoint-catalog';
 import { ListEndpointsTool } from './list-endpoints';
+import { sourceIdFor } from './source-id';
 import { invokeTool, ToolInputError } from './tool';
 
 const endpoint = (overrides: Partial<StoredEndpoint>): StoredEndpoint => ({
@@ -41,6 +42,7 @@ describe('ListEndpointsTool', () => {
     expect(catalog.queries).toEqual([{ repoId: 'repo-1', limit: 50, offset: 0 }]);
     expect(output.total).toBe(2);
     expect(output.endpoints[0]).toEqual({
+      sourceId: sourceIdFor('endpoint', 'apps/api/src/ingestion/repos.controller.ts:89:GET:/repos/:id'),
       method: 'GET',
       path: '/repos/:id',
       file: 'apps/api/src/ingestion/repos.controller.ts',
@@ -85,7 +87,10 @@ describe('ListEndpointsTool', () => {
   it('cites each declaration line and shows it as an endpoint excerpt', async () => {
     const tool = new ListEndpointsTool(new FakeCatalog([endpoint({})]));
     const output = await invokeTool(tool, {}, context);
-    expect(tool.citations(output)).toEqual([{ path: 'apps/api/src/ingestion/repos.controller.ts', startLine: 89, endLine: 89 }]);
+    expect(tool.citations(output)).toEqual([
+      { id: output.endpoints[0].sourceId, path: 'apps/api/src/ingestion/repos.controller.ts', startLine: 89, endLine: 89 },
+    ]);
+    expect(output.endpoints[0].sourceId).toMatch(/^e-[0-9a-f]{8}$/);
     expect(tool.excerpts(output)).toEqual([
       { path: 'apps/api/src/ingestion/repos.controller.ts', startLine: 89, endLine: 89, text: "@Get(':id')", source: 'endpoint' },
     ]);

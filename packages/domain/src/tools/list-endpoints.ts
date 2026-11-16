@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { HTTP_METHODS, type EndpointFramework, type HttpMethod } from '../endpoints/api-endpoint';
 import type { Excerpt } from '../events';
-import type { Citation } from '../ports/chat-store';
 import type { EndpointCatalog } from '../ports/endpoint-catalog';
 import { normalizePathPrefix } from './search-code';
-import type { Tool, ToolContext } from './tool';
+import { sourceIdFor } from './source-id';
+import type { CitableSource, Tool, ToolContext } from './tool';
 
 export const LIST_ENDPOINTS_MAX = 100;
 
@@ -50,6 +50,8 @@ export const listEndpointsInputSchema = z
 export type ListEndpointsInput = z.infer<typeof listEndpointsInputSchema>;
 
 export interface ListedEndpoint {
+  /** What a final answer cites for this declaration. */
+  sourceId: string;
   method: HttpMethod;
   path: string;
   /** Repo-relative file that declares the route. */
@@ -117,6 +119,7 @@ export class ListEndpointsTool implements Tool<ListEndpointsInput, ListEndpoints
 
     return {
       endpoints: endpoints.map((e) => ({
+        sourceId: sourceIdFor('endpoint', `${e.filePath}:${String(e.line)}:${e.method}:${e.path}`),
         method: e.method,
         path: e.path,
         file: e.filePath,
@@ -138,8 +141,13 @@ export class ListEndpointsTool implements Tool<ListEndpointsInput, ListEndpoints
     return `${String(output.offset + 1)}-${String(output.offset + shown)} of ${String(output.total)} endpoints`;
   }
 
-  citations(output: ListEndpointsOutput): Citation[] {
-    return output.endpoints.map((e) => ({ path: e.file, startLine: e.line, endLine: e.line }));
+  citations(output: ListEndpointsOutput): CitableSource[] {
+    return output.endpoints.map((e) => ({
+      id: e.sourceId,
+      path: e.file,
+      startLine: e.line,
+      endLine: e.line,
+    }));
   }
 
   excerpts(output: ListEndpointsOutput): Excerpt[] {

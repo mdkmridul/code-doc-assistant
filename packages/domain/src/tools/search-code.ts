@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import type { Excerpt } from '../events';
-import type { Citation } from '../ports/chat-store';
 import type { Embedder } from '../ports/embedder';
 import type { RetrievedChunk, Retriever } from '../ports/retriever';
-import type { Tool, ToolContext } from './tool';
+import type { CitableSource, Tool, ToolContext } from './tool';
 
 /** Long enough to recognise the code, short enough that 8–20 hits stay cheap. */
 export const SEARCH_SNIPPET_CHARS = 600;
@@ -45,8 +44,11 @@ export const searchCodeInputSchema = z
 
 export type SearchCodeInput = z.infer<typeof searchCodeInputSchema>;
 
+/** A search hit as the model sees it: `sourceId` is the chunk id, what a final answer cites. */
+export type SearchHit = Omit<RetrievedChunk, 'chunkId'> & { sourceId: string };
+
 export interface SearchCodeOutput {
-  results: RetrievedChunk[];
+  results: SearchHit[];
 }
 
 /** "./src\\auth/" and "/src/auth/" both mean "src/auth/" in the repo. */
@@ -60,7 +62,7 @@ export class SearchCodeTool implements Tool<SearchCodeInput, SearchCodeOutput> {
   readonly description =
     'Semantic search over the current repository. Returns the code chunks closest in ' +
     'meaning to the query, best first, each with path, line range, symbol, a snippet and a ' +
-    'similarity score (0-1). Use it to find where something is implemented, configured or ' +
+    'similarity score (0-1), and a sourceId to cite it by. Use it to find where something is implemented, configured or ' +
     'documented. Narrow with pathPrefix or language when you know where to look.';
   readonly inputSchema = searchCodeInputSchema;
 
@@ -86,7 +88,11 @@ export class SearchCodeTool implements Tool<SearchCodeInput, SearchCodeOutput> {
     });
 
     return {
-      results: results.map((r) => ({ ...r, score: Math.round(r.score * 1000) / 1000 })),
+      results: results.map(({ chunkId, ...hit }) => ({
+        sourceId: chunkId,
+        ...hit,
+        score: Math.round(hit.score * 1000) / 1000,
+      })),
     };
   }
 
@@ -105,7 +111,12 @@ export class SearchCodeTool implements Tool<SearchCodeInput, SearchCodeOutput> {
     }));
   }
 
-  citations(output: SearchCodeOutput): Citation[] {
-    return output.results.map(({ path, startLine, endLine }) => ({ path, startLine, endLine }));
+  citations(output: SearchCodeOutput): CitableSource[] {
+    return output.results.map(({ sourceId, path, startLine, endLine }) => ({
+      id: sourceId,
+      path,
+      startLine,
+      endLine,
+    }));
   }
 }

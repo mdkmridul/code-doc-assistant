@@ -5,6 +5,8 @@ import {
   AnswerQuestion,
   CONTEXT_BUDGET_NOTE,
   ITERATION_CAP_NOTE,
+  NOT_FOUND_ANSWER,
+  rewriteNote,
 } from './answer-question';
 import { SessionNotFoundError } from './errors';
 import {
@@ -12,6 +14,7 @@ import {
   FakeChatStore,
   FakeLanguageModel,
   FakeLlmCallLog,
+  final,
   LookupTool,
   SteppingClock,
 } from './fakes.test-helpers';
@@ -45,14 +48,14 @@ const setup = async (
 };
 
 describe('AnswerQuestion', () => {
-  it('answers directly when the model asks for no tools', async () => {
-    const { ask, model } = await setup([{ text: 'It is a library.' }]);
+  it('answers "not found" at once when the model says the repository does not answer it', async () => {
+    const { ask, model } = await setup([{ text: final('That is not in this codebase.', [], false) }]);
 
     const result = await ask('What is this?');
 
     expect(result).toMatchObject({
-      answer: 'It is a library.',
-      outcome: 'completed',
+      answer: NOT_FOUND_ANSWER,
+      outcome: 'not_found',
       iterations: 1,
       toolCalls: [],
       citations: [],
@@ -70,7 +73,7 @@ describe('AnswerQuestion', () => {
     const { ask, model, lookup } = await setup([
       { toolCalls: [call('t1', 'lookup', { key: 'retry' })] },
       { toolCalls: [call('t2', 'lookup', { key: 'timeout' })] },
-      { text: 'Retries live in src/retry.ts.' },
+      { text: final('Retries live in src/retry.ts.', ['lk-retry']) },
     ]);
 
     const result = await ask('How are retries done?');
@@ -95,7 +98,7 @@ describe('AnswerQuestion', () => {
         results: [
           {
             toolCallId: 't1',
-            content: JSON.stringify({ value: 'value-of-retry', path: 'src/retry.ts' }),
+            content: JSON.stringify({ sourceId: 'lk-retry', path: 'src/retry.ts', value: 'value-of-retry' }),
             isError: false,
           },
         ],
@@ -111,7 +114,7 @@ describe('AnswerQuestion', () => {
         results: [
           {
             toolCallId: 't2',
-            content: JSON.stringify({ value: 'value-of-timeout', path: 'src/timeout.ts' }),
+            content: JSON.stringify({ sourceId: 'lk-timeout', path: 'src/timeout.ts', value: 'value-of-timeout' }),
             isError: false,
           },
         ],
@@ -122,7 +125,7 @@ describe('AnswerQuestion', () => {
   it('keeps the system prompt and tools identical on every call of the loop', async () => {
     const { ask, model } = await setup([
       { toolCalls: [call('t1', 'lookup', { key: 'a' })] },
-      { text: 'done' },
+      { text: final('done', ['lk-a']) },
     ]);
 
     await ask('q');
@@ -136,7 +139,7 @@ describe('AnswerQuestion', () => {
       {
         toolCalls: [call('a', 'lookup', { key: 'one' }), call('b', 'lookup', { key: 'two' })],
       },
-      { text: 'ok' },
+      { text: final('ok', ['lk-one']) },
     ]);
 
     await ask('q');
@@ -157,7 +160,7 @@ describe('AnswerQuestion', () => {
           call('boom', 'lookup', { key: 'explode' }),
         ],
       },
-      { text: 'Sorry, the lookups failed.' },
+      { text: final('Sorry, the lookups failed.', [], false) },
     ]);
 
     const result = await ask('q');
@@ -176,7 +179,7 @@ describe('AnswerQuestion', () => {
       ['delete_repo', true],
       ['lookup', true],
     ]);
-    expect(result.outcome).toBe('completed');
+    expect(result.outcome).toBe('not_found');
   });
 
   it('stops at the iteration cap with a final tool-less call that still answers', async () => {
@@ -184,7 +187,7 @@ describe('AnswerQuestion', () => {
       [
         { toolCalls: [call('t1', 'lookup', { key: 'a' })] },
         { toolCalls: [call('t2', 'lookup', { key: 'b' })] },
-        { text: 'Best effort: see src/a.ts.' },
+        { text: final('Best effort: see src/a.ts.', ['lk-a']) },
       ],
       { maxIterations: 3, tokenBudget: 100_000 },
     );
@@ -203,7 +206,7 @@ describe('AnswerQuestion', () => {
     });
   });
 
-  it('never makes more than maxIterations calls, even if the model keeps asking for tools', async () => {
+  it('never makes more than maxIterations calls (plus one rewrite), even if the model keeps asking for tools', async () => {
     const { ask, model } = await setup(
       Array.from({ length: 10 }, (_, i) => ({ toolCalls: [call(`t${String(i)}`, 'lookup', { key: 'x' })] })),
       { maxIterations: 2, tokenBudget: 100_000 },
@@ -211,8 +214,78 @@ describe('AnswerQuestion', () => {
 
     const result = await ask('q');
 
-    expect(model.requests).toHaveLength(2);
-    expect(result.outcome).toBe('iteration_cap');
+    // The capped final call wrote no answer block; its rewrite (tools off) didn't either.
+    expect(model.requests.map((r) => r.allowToolCalls)).toEqual([true, false, false]);
+    expect(result.outcome).toBe('not_found');
+  });
+
+  describe('final answer check', () => {
+    it('asks for one rewrite, without tools, when the citation block is missing', async () => {
+      const { ask, model } = await setup([
+        { toolCalls: [call('t1', 'lookup', { key: 'retry' })] },
+        { text: 'Retries live in src/retry.ts.' },
+        { text: final('Retries live in src/retry.ts:1-10.', ['lk-retry']) },
+      ]);
+
+      const result = await ask('How are retries done?');
+
+      expect(result).toMatchObject({
+        outcome: 'completed',
+        iterations: 3,
+        answer: 'Retries live in src/retry.ts:1-10.',
+        citations: [{ path: 'src/retry.ts', startLine: 1, endLine: 10 }],
+      });
+      expect(model.requests[2].allowToolCalls).toBe(false);
+      expect(model.requests[2].messages.slice(-2)).toEqual([
+        { role: 'assistant', text: 'Retries live in src/retry.ts.', toolCalls: [], providerContent: { raw: 'turn-2' } },
+        { role: 'system_note', content: rewriteNote('the answer does not end with a <citations> block') },
+      ]);
+    });
+
+    it('rejects fabricated citations and, after a rewrite that still has none, answers not found', async () => {
+      const { ask, model, chats, sessionId } = await setup([
+        { toolCalls: [call('t1', 'lookup', { key: 'retry' })] },
+        { text: final('It is in src/made-up.ts:1-5.', ['lk-made-up']) },
+        { text: final('It is in src/made-up.ts:1-5.', [{ sourceId: 'c0ffee00-0000-4000-8000-000000000000', lines: [1, 5] }]) },
+      ]);
+
+      const result = await ask('Where is the magic?');
+
+      expect(model.requests).toHaveLength(3);
+      const note = model.requests[2].messages.at(-1);
+      expect(note).toMatchObject({ role: 'system_note' });
+      expect(note?.role === 'system_note' ? note.content : '').toMatch(
+        /none of its citations matches a tool result from this question \(unknown sourceId lk-made-up\)/,
+      );
+      expect(result).toMatchObject({ outcome: 'not_found', answer: NOT_FOUND_ANSWER, citations: [], unverifiedReferences: [] });
+      expect((await chats.listMessages(sessionId)).at(-1)).toMatchObject({ content: NOT_FOUND_ANSWER, citations: [] });
+    });
+
+    it('only accepts sources from this question, not from earlier turns', async () => {
+      const { ask } = await setup([
+        { toolCalls: [call('t1', 'lookup', { key: 'retry' })] },
+        { text: final('First.', ['lk-retry']) },
+        // Second question: no tools, but it cites the first question's source.
+        { text: final('Same as before.', ['lk-retry']) },
+        { text: final('Same as before.', ['lk-retry']) },
+      ]);
+
+      await ask('First?');
+      const second = await ask('Second?');
+
+      expect(second.outcome).toBe('not_found');
+    });
+
+    it('accepts a not-found rewrite', async () => {
+      const { ask } = await setup([
+        { text: 'The capital of France is Paris.' },
+        { text: final('This repository does not cover that.', [], false) },
+      ]);
+
+      const result = await ask('What is the capital of France?');
+
+      expect(result).toMatchObject({ outcome: 'not_found', iterations: 2, answer: NOT_FOUND_ANSWER });
+    });
   });
 
   it('stops when the token budget is spent', async () => {
@@ -236,7 +309,7 @@ describe('AnswerQuestion', () => {
 
     it('counts the tokens every tool result adds and reports the spend', async () => {
       const { ask } = await setup(
-        [{ toolCalls: [call('t1', 'lookup', { key: 'big-1000' })] }, { text: 'Done.' }],
+        [{ toolCalls: [call('t1', 'lookup', { key: 'big-1000' })] }, { text: final('Done.', ['lk-big-1000']) }],
         undefined,
         budget,
       );
@@ -252,7 +325,7 @@ describe('AnswerQuestion', () => {
 
     it('truncates a result over the per-result cap before the model sees it', async () => {
       const { ask, model } = await setup(
-        [{ toolCalls: [call('t1', 'lookup', { key: 'big-4000' })] }, { text: 'Done.' }],
+        [{ toolCalls: [call('t1', 'lookup', { key: 'big-4000' })] }, { text: final('Done.', ['lk-big-4000']) }],
         undefined,
         budget,
       );
@@ -273,7 +346,7 @@ describe('AnswerQuestion', () => {
         [
           { toolCalls: [call('t1', 'lookup', { key: 'big-2500' })] },
           { toolCalls: [call('t2', 'lookup', { key: 'big-2900' })] },
-          { text: 'What I found: see src/big-2500.ts:1-10.' },
+          { text: final('What I found: see src/big-2500.ts:1-10.', ['lk-big-2500']) },
           { text: 'never reached' },
         ],
         { maxIterations: 8, tokenBudget: 1_000_000 },
@@ -315,7 +388,7 @@ describe('AnswerQuestion', () => {
         toolCalls: [0, 1, 2].map((j) => call(`t${String(i)}-${String(j)}`, 'lookup', { key: 'big-1000' })),
       }));
       const { ask, model } = await setup(
-        [greedy[0], greedy[1], { text: 'Summary of what I found.' }, ...greedy.slice(2)],
+        [greedy[0], greedy[1], { text: final('Summary of what I found.', ['lk-big-1000']) }, ...greedy.slice(2)],
         { maxIterations: 20, tokenBudget: 10_000_000 },
         budget,
       );
@@ -334,7 +407,7 @@ describe('AnswerQuestion', () => {
   it('logs one llm_call per model call with tokens, cost, latency and prompt version', async () => {
     const { ask, llmCalls, sessionId } = await setup([
       { toolCalls: [call('t1', 'lookup', { key: 'a' })], model: 'claude-x', usage: { inputTokens: 500, outputTokens: 40, costUsd: 0.0028 } },
-      { text: 'done', model: 'claude-x', usage: { inputTokens: 700, outputTokens: 60, costUsd: 0.004 } },
+      { text: final('done', ['lk-a']), model: 'claude-x', usage: { inputTokens: 700, outputTokens: 60, costUsd: 0.004 } },
     ]);
 
     const result = await ask('q');
@@ -353,7 +426,7 @@ describe('AnswerQuestion', () => {
       },
       expect.objectContaining({ inputTokens: 700, outputTokens: 60, status: 'succeeded' }),
     ]);
-    expect(result.usage).toEqual({ inputTokens: 1200, outputTokens: 100, costUsd: 0.0068, contextTokens: 14 });
+    expect(result.usage).toEqual({ inputTokens: 1200, outputTokens: 100, costUsd: 0.0068, contextTokens: 20 });
   });
 
   it('logs a failed model call and rethrows, keeping the question stored', async () => {
@@ -367,8 +440,8 @@ describe('AnswerQuestion', () => {
     expect((await chats.listMessages(sessionId)).map((m) => m.role)).toEqual(['user']);
   });
 
-  it('stores the question and the answer with its tool trace and its verified citations', async () => {
-    // LookupTool evidence: src/<key>.ts lines 1-10.
+  it('stores the answer text with its tool trace and only the citations that check out', async () => {
+    // LookupTool evidence: src/<key>.ts lines 1-10, sourceId lk-<key>.
     const answer =
       'The loop is in src/retry.ts:2-5 (see `retry.ts:8`). Also src/retry.ts mentions it, ' +
       'and src/invented.ts:1-3 does too.';
@@ -376,18 +449,27 @@ describe('AnswerQuestion', () => {
       {
         toolCalls: [call('t1', 'lookup', { key: 'retry' }), call('t2', 'lookup', { key: 'unused' })],
       },
-      { text: answer },
+      {
+        text: final(answer, [
+          { sourceId: 'lk-retry', lines: [2, 5] },
+          { sourceId: 'lk-retry', lines: [8, 8] },
+          { sourceId: 'lk-invented', lines: [1, 3] },
+        ]),
+      },
     ]);
 
     const result = await ask('How are retries done?');
 
-    // Only line references backed by retrieved code count; a bare path is not a citation,
-    // and src/unused.ts was retrieved but never referenced.
+    // Citations come from the block, checked against this turn's sources; src/unused.ts
+    // was retrieved but not cited. The invented source is rejected, and so is the
+    // inline reference to it.
+    expect(result.outcome).toBe('completed');
+    expect(result.answer).toBe(answer);
     expect(result.citations).toEqual([
       { path: 'src/retry.ts', startLine: 2, endLine: 5 },
       { path: 'src/retry.ts', startLine: 8, endLine: 8 },
     ]);
-    expect(result.unverifiedReferences).toEqual(['src/invented.ts:1-3']);
+    expect(result.unverifiedReferences).toEqual(['src/invented.ts:1-3', 'unknown sourceId lk-invented']);
     const stored = await chats.listMessages(sessionId);
     expect(stored).toEqual([
       expect.objectContaining({ role: 'user', content: 'How are retries done?' }),
@@ -396,8 +478,8 @@ describe('AnswerQuestion', () => {
         role: 'assistant',
         content: answer,
         toolCalls: [
-          { name: 'lookup', input: { key: 'retry' }, isError: false, summary: 'ok', excerpts: [], tokens: 16 },
-          { name: 'lookup', input: { key: 'unused' }, isError: false, summary: 'ok', excerpts: [], tokens: 17 },
+          { name: 'lookup', input: { key: 'retry' }, isError: false, summary: 'ok', excerpts: [], tokens: 24 },
+          { name: 'lookup', input: { key: 'unused' }, isError: false, summary: 'ok', excerpts: [], tokens: 25 },
         ],
         citations: result.citations,
       }),
@@ -407,8 +489,8 @@ describe('AnswerQuestion', () => {
   it('replays prior turns as plain question/answer text', async () => {
     const { ask, model } = await setup([
       { toolCalls: [call('t1', 'lookup', { key: 'a' })] },
-      { text: 'First answer.' },
-      { text: 'Second answer.' },
+      { text: final('First answer.', ['lk-a']) },
+      { text: final('Second answer.', [], false) },
     ]);
 
     await ask('First?');

@@ -102,6 +102,21 @@ export function applyEvent(turn: Turn, event: ChatStreamEvent): Turn {
 }
 
 /** The answer text to show: final if known, else the text of the latest non-tool iteration. */
+/**
+ * Streamed answer text without the `<citations>` block that ends a final
+ * answer (the API parses it; done.result.answer arrives without it). Also hides
+ * a tag still arriving, like a trailing "<cit".
+ */
+export function withoutCitationBlock(text: string): string {
+  const open = text.indexOf("<citations>");
+  if (open !== -1) return text.slice(0, open).trimEnd();
+  const tag = "<citations>";
+  for (let n = Math.min(tag.length - 1, text.length); n > 0; n--) {
+    if (text.endsWith(tag.slice(0, n))) return text.slice(0, -n).trimEnd();
+  }
+  return text;
+}
+
 export function visibleAnswer(turn: Turn): string {
   if (turn.answer !== undefined) return turn.answer;
   const iterations = Object.keys(turn.textByIteration)
@@ -109,7 +124,7 @@ export function visibleAnswer(turn: Turn): string {
     .filter((i) => !turn.toolIterations.includes(i))
     .sort((a, b) => a - b);
   const last = iterations.at(-1);
-  return last === undefined ? "" : turn.textByIteration[last];
+  return last === undefined ? "" : withoutCitationBlock(turn.textByIteration[last]);
 }
 
 function stepFromTrace(trace: ToolCallTrace, index: number): ToolStep {

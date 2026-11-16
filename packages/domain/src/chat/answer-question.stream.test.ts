@@ -8,6 +8,7 @@ import {
   FakeChatStore,
   FakeLanguageModel,
   FakeLlmCallLog,
+  final,
   HANG,
   LookupTool,
 } from './fakes.test-helpers';
@@ -55,7 +56,7 @@ describe('AnswerQuestion streaming', () => {
   it('streams tokens per iteration, tool events between, and ends with done', async () => {
     const { ask, events } = await setup([
       { text: 'Let me look. ', toolCalls: [call('t1', 'lookup', { key: 'retry' })] },
-      { text: 'Retries live in src/retry.ts:1-5.' },
+      { text: final('Retries live in src/retry.ts:1-5.', ['lk-retry']) },
     ]);
 
     const result = await ask('How are retries done?');
@@ -69,9 +70,11 @@ describe('AnswerQuestion streaming', () => {
       'token:2:Retries ',
       'token:2:live ',
       'token:2:in ',
-      'token:2:src/retry.ts:1-5.',
+      // The citation block streams too (the web app hides it); the stored answer drops it.
+      `token:2:src/retry.ts:1-5.${final('', ['lk-retry'])}`,
       'done:completed',
     ]);
+    expect(result.answer).toBe('Retries live in src/retry.ts:1-5.');
     const done = events.at(-1);
     expect(done).toEqual({ type: 'done', result });
   });
@@ -79,7 +82,7 @@ describe('AnswerQuestion streaming', () => {
   it('announces every tool call of a turn before any of their results', async () => {
     const { ask, events } = await setup([
       { toolCalls: [call('a', 'lookup', { key: 'one' }), call('b', 'lookup', { key: 'two' })] },
-      { text: 'ok' },
+      { text: final('ok', ['lk-one']) },
     ]);
 
     await ask('q');
@@ -96,7 +99,7 @@ describe('AnswerQuestion streaming', () => {
   it('reports failing tools in tool_result with the error', async () => {
     const { ask, events } = await setup([
       { toolCalls: [call('x', 'lookup', { key: 'explode' })] },
-      { text: 'sorry' },
+      { text: final('sorry', [], false) },
     ]);
 
     await ask('q');

@@ -2,6 +2,14 @@ import type { z } from 'zod';
 import type { Excerpt } from '../events';
 import type { Citation } from '../ports/chat-store';
 
+/**
+ * A location a final answer may cite: the code a tool showed the model, with
+ * the `sourceId` that tool put in its output (a chunk id for search hits).
+ */
+export interface CitableSource extends Citation {
+  id: string;
+}
+
 /** Facts a tool gets from the conversation, never from the model's arguments. */
 export interface ToolContext {
   /** The repository the conversation is about. */
@@ -20,8 +28,8 @@ export interface Tool<TInput, TOutput> {
   readonly description: string;
   readonly inputSchema: z.ZodType<TInput>;
   execute(input: TInput, context: ToolContext): Promise<TOutput>;
-  /** Source locations in the output an answer may cite. Omit for tools that return none. */
-  citations?(output: TOutput): Citation[];
+  /** Locations in the output an answer may cite, by the sourceIds the output shows. Omit for tools that return none. */
+  citations?(output: TOutput): CitableSource[];
   /** One line describing a result for people watching the stream, e.g. "8 results". */
   summarize?(output: TOutput): string;
   /** The code the output shows, for a sources panel. */
