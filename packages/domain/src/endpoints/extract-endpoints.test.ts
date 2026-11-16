@@ -236,3 +236,36 @@ def logout():
     expect(py(`@cache.get("/x")\ndef x(): ...`)).toEqual([]);
   });
 });
+
+describe('extractEndpoints: edge cases', () => {
+  it('reads a chained route whose handler arguments hold parentheses and quotes', () => {
+    expect(
+      brief(
+        js(String.raw`app.route('/notes')
+  .get(cache('(list)', "it's \"quoted\""), notes.list)
+  .delete(guard(), notes.clear);`),
+      ),
+    ).toEqual(['GET /notes @2 notes.list', 'DELETE /notes @3 notes.clear']);
+  });
+
+  it('stops following a chain whose call is never closed', () => {
+    expect(brief(js("app.route('/broken')\n  .get(handler")).length).toBe(0);
+  });
+
+  it('skips comment lines between a decorator and its method', () => {
+    expect(
+      brief(
+        ts(`@Controller('items')
+class Items {
+  @Get()
+  // lists every item
+  list() {}
+}`),
+      ),
+    ).toEqual(['GET /items @3 list']);
+  });
+
+  it('reports no handler when nothing follows the decorator', () => {
+    expect(brief(ts(`@Controller('x')\nclass X {\n  @Get('y')\n`))).toEqual(['GET /x/y @3 -']);
+  });
+});

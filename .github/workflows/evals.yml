@@ -1,0 +1,79 @@
+# Evals call Claude and cost money (~$4 per run), so they never run on push.
+# They run when the `run-evals` label is added to a pull request; to run them
+# again, remove the label and add it back. Needs the ANTHROPIC_API_KEY
+# repository secret. ADR 0021.
+name: Evals
+
+on:
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: evals-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  evals:
+    name: Recall regression + judged answers (v4, hybrid)
+    # Only the label that was just added counts, so adding another label to an
+    # already-labelled PR doesn't spend again.
+    if: github.event.label.name == 'run-evals'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require the Anthropic key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::Add the ANTHROPIC_API_KEY repository secret to run evals."
+            exit 1
+          fi
+
+      - name: Write .env for the stack
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # The template's values work as-is in CI (CPU Ollama, default ports);
+          # only the key is a secret. The file is never uploaded.
+          sed "s|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}|" .env.example > .env
+
+      - name: Start the whole stack (Postgres, Redis, Ollama, migrate, API)
+        run: |
+          docker compose --profile app up -d --build api
+          for _ in $(seq 1 120); do
+            curl -sf -o /dev/null http://localhost:3001/metrics && break
+            sleep 5
+          done
+          curl -sf -o /dev/null http://localhost:3001/metrics || { docker compose logs api; exit 1; }
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: evals/uv.lock
+
+      - name: Recall must not regress against evals/baseline.json (no model calls)
+        run: uv --directory evals run pytest -v
+
+      - name: Answers judged for v4 with hybrid retrieval
+        run: uv --directory evals run cda-eval answers --prompt v4 --mode hybrid
+
+      - name: Results
+        if: always()
+        run: |
+          [ -f evals/results/summary.md ] && cat evals/results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: evals/results/
+
+      - name: API logs on failure
+        if: failure()
+        run: docker compose logs api --tail 200

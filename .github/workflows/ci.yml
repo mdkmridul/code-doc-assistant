@@ -1,0 +1,79 @@
+# Lint, type-check and unit tests on every push; the SQL/Redis integration
+# tests against real Postgres (pgvector) and Redis service containers.
+# Evals cost money and live in evals.yml (only on a PR label). ADR 0021.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Prisma's config needs a URL even for `prisma generate` (npm ci's postinstall);
+  # nothing connects to it in the checks job.
+  DATABASE_URL: postgresql://cda:cda@localhost:5432/cda
+  # next.config.ts refuses to load without it (typecheck runs `next typegen`).
+  NEXT_PUBLIC_API_URL: http://localhost:3001
+
+jobs:
+  checks:
+    name: Lint, typecheck, unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: Domain coverage thresholds
+        run: npm run test:coverage -w @cda/domain
+
+  integration:
+    name: SQL and Redis integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: cda
+          POSTGRES_PASSWORD: cda
+          POSTGRES_DB: cda
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U cda -d cda"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Migrations apply cleanly and match schema.prisma
+        working-directory: apps/api
+        run: |
+          npx prisma migrate deploy
+          # An empty diff means Prisma won't try to drop the hand-written search indexes.
+          npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+      - name: Retriever, endpoint catalog, metrics SQL and usage guard
+        run: npm run test:integration

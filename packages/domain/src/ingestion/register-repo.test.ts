@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ingestKeyFor, type RepoSource } from '../repo';
+import { DuplicateIngestKeyError } from '../ports/repo-store';
 import { RegisterRepo } from './register-repo';
 import { FakeIngestQueue, FakeRepoStore } from './fakes.test-helpers';
 
@@ -109,6 +110,26 @@ describe('RegisterRepo', () => {
     const result = await useCase.execute(gitSource);
 
     expect(result).toEqual({ repo: { id: 'winner', status: 'queued' }, enqueued: false });
+    expect(queue.jobs).toEqual([]);
+  });
+});
+
+describe('RegisterRepo failures', () => {
+  it('rethrows a store failure that is not a duplicate key', async () => {
+    const repos = new FakeRepoStore();
+    repos.create = () => Promise.reject(new Error('database down'));
+    const queue = new FakeIngestQueue();
+
+    await expect(new RegisterRepo(repos, queue).execute(gitSource)).rejects.toThrow('database down');
+    expect(queue.jobs).toEqual([]);
+  });
+
+  it('rethrows the duplicate-key error when the winning row cannot be found', async () => {
+    const repos = new FakeRepoStore();
+    repos.create = (key: string) => Promise.reject(new DuplicateIngestKeyError(key));
+    const queue = new FakeIngestQueue();
+
+    await expect(new RegisterRepo(repos, queue).execute(gitSource)).rejects.toThrow(DuplicateIngestKeyError);
     expect(queue.jobs).toEqual([]);
   });
 });

@@ -25,6 +25,11 @@ Run from the repo root:
 - `npm run prisma:generate -w api` — regenerates the client into `apps/api/src/generated/prisma` (gitignored; also runs on `npm install`).
 - `make eval` / `make eval-retrieval` / `make eval-baseline` / `make eval-test [TOLERANCE=0.05]` — evals in `evals/` (a uv Python project; needs `uv`, and the API running). Golden set `evals/golden/ky.yaml` (ky at a pinned commit, uploaded as that commit's zip). `make eval` calls Claude (~$10); `eval-retrieval`, `eval-baseline` and `eval-test` make no model calls. Results go to `evals/results/` named `<prompt>@<version>__<mode>.md`; `evals/baseline.json` is the committed recall baseline that `eval-test` guards. See `evals/README.md` and ADR 0019.
 
+## CI
+
+- `.github/workflows/ci.yml` (every push and PR): lint, typecheck, unit tests, domain coverage thresholds (`npm run test:coverage -w @cda/domain`, in `packages/domain/vitest.config.mts`; raise them as coverage grows, never lower them to pass), and integration tests against Postgres/Redis service containers with a migration drift check. Run the same commands locally before pushing.
+- `.github/workflows/evals.yml` runs only when the `run-evals` label is added to a PR (costs money; needs the `ANTHROPIC_API_KEY` repository secret). Re-run by removing and re-adding the label. ADR 0021.
+
 ## Code rules
 
 - TypeScript `strict` everywhere. Shared compiler options live in `tsconfig.base.json` (`module`/`moduleResolution: nodenext`, CommonJS output).
