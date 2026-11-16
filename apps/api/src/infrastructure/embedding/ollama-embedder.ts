@@ -37,12 +37,14 @@ export class OllamaEmbedder implements Embedder, OnModuleInit {
   private readonly logger = new Logger(OllamaEmbedder.name);
   private readonly baseUrl: string;
   private readonly prefix: string;
+  private readonly inputType: keyof typeof TASK_PREFIX;
   private readonly timeoutMs: number;
   private readonly fetchFn: typeof fetch;
 
   constructor(options: OllamaEmbedderOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
-    this.prefix = TASK_PREFIX[options.inputType ?? 'document'];
+    this.inputType = options.inputType ?? 'document';
+    this.prefix = TASK_PREFIX[this.inputType];
     this.maxBatchSize = options.maxBatchSize ?? 32;
     this.timeoutMs = options.timeoutMs ?? 120_000;
     this.fetchFn = options.fetchFn ?? fetch;
@@ -74,7 +76,9 @@ export class OllamaEmbedder implements Embedder, OnModuleInit {
           'Pull it with `docker compose up ollama-pull`.',
       );
     }
-    this.logger.log(`Connected to Ollama ${version} (${NOMIC_MODEL})`);
+    this.logger.log(
+      `Connected to Ollama ${version} (${NOMIC_MODEL}, ${this.inputType} embeddings)`,
+    );
   }
 
   async embed(texts: readonly string[]): Promise<number[][]> {

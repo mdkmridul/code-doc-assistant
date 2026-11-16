@@ -7,6 +7,7 @@ import type { AppConfig } from './config/env.schema';
 import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { IngestionModule } from './ingestion/ingestion.module';
+import { SearchModule } from './search/search.module';
 
 @Module({})
 export class AppModule {
@@ -19,6 +20,7 @@ export class AppModule {
         RedisModule,
         BullModule.forRoot({ connection: { url: config.REDIS_URL } }),
         IngestionModule,
+        SearchModule.forRoot(config),
       ],
       controllers: [AppController],
       providers: [AppService],

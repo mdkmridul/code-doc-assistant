@@ -12,16 +12,19 @@ Run from the repo root:
 
 - `npm install` — installs every workspace. Use only the root lockfile; don't run `npm install` inside a workspace.
 - `npm run lint` / `npm run typecheck` / `npm test` — cover all three workspaces; all must pass before a step is done.
+- `npm run test:integration` — SQL tests (`*.int-spec.ts`) against the Compose Postgres, in a separate `cda_test` database (created and migrated automatically). Needs `docker compose up -d`. Run it whenever retriever or store SQL changes.
 - `docker compose up -d` — starts Postgres (pgvector), Redis and Ollama (local embeddings), and pulls `nomic-embed-text` on first run (`ollama-pull` service), using the values in the root `.env`. On NVIDIA machines, `COMPOSE_FILE` in `.env` adds `docker-compose.gpu.yml` (about 23x faster embeddings); `docker compose exec ollama ollama ps` should show `100% GPU`.
 - `npm run start:dev -w api` — runs the API; it logs `Connected to Postgres ... (pgvector x.y.z)`, `Connected to Redis` and `Connected to Ollama ... (nomic-embed-text)` on a healthy boot.
 - `npm run db:deploy -w api` — applies migrations. `npm run db:migrate -w api` creates one from `schema.prisma` changes (dev). `npm run db:seed -w api` inserts the sample repo.
 - `POST /repos` with `{"url": "https://github.com/<owner>/<repo>"}` or a multipart `file` (.zip) queues an ingest; `GET /repos/:id` shows its status (`queued → running → ready | failed`) and file/chunk counts.
+- `GET /debug/search?repoId=<uuid>&q=...[&topK=&path=&language=]` — TEMPORARY, non-production only: runs the `search_code` tool. Delete `apps/api/src/search/debug-search.controller.ts` once the chat endpoint calls the tool.
 - `npm run prisma:generate -w api` — regenerates the client into `apps/api/src/generated/prisma` (gitignored; also runs on `npm install`).
 
 ## Code rules
 
 - TypeScript `strict` everywhere. Shared compiler options live in `tsconfig.base.json` (`module`/`moduleResolution: nodenext`, CommonJS output).
-- `packages/domain` never imports from Nest, Prisma, Redis or any SDK. Zod is its only allowed runtime dependency.
+- `packages/domain` never imports from Nest, Prisma, Redis or any SDK. Zod is its only allowed runtime dependency. Its ESLint config enforces this (`no-restricted-imports`).
+- Tools (`packages/domain/src/tools`) implement `Tool`: a zod `inputSchema` with `.describe()` on every field (the model reads them), and `execute(input, context)`. Facts the model must not choose, like `repoId`, come from `ToolContext`, never from input. Call tools through `invokeTool`, which validates first.
 
 ## Environment variables
 
@@ -35,6 +38,8 @@ Run from the repo root:
 - `chunks.embedding` (pgvector) and `chunks.search_vector` (generated tsvector) and their HNSW/GIN indexes are created by a hand-written migration (ADR 0005). Any change to them is hand-written SQL, and `schema.prisma` must be updated to match (`Unsupported`, `dbgenerated`, `@@index`).
 - After any schema or migration change, `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` (in `apps/api`) must print an empty migration. Otherwise Prisma will try to drop the search indexes.
 - Prisma cannot write `Unsupported` columns: set embeddings with `$executeRaw` and a `::vector` cast.
+- Vector search is raw SQL in `pgvector-retriever.ts` (ADR 0010). Keep the inner `ORDER BY embedding <=> query LIMIT k` shape (it is what lets HNSW be used), and keep `hnsw.iterative_scan` on: without it, repo/path/language filters can return too few rows.
+- Deleted chunks stay in the HNSW graph until VACUUM and hurt recall; integration tests VACUUM after cleanup.
 - Full-text search uses the `simple` dictionary (no stemming), so query with `to_tsquery('simple', ...)`.
 
 ## Embeddings

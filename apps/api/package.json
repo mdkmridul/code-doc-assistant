@@ -29,7 +29,8 @@
     "prebuild": "npm run build:domain",
     "prestart": "npm run build:domain",
     "prestart:dev": "npm run build:domain",
-    "prestart:debug": "npm run build:domain"
+    "prestart:debug": "npm run build:domain",
+    "test:int": "jest --config ./test/jest-int.json --runInBand"
   },
   "dependencies": {
     "@cda/domain": "*",
