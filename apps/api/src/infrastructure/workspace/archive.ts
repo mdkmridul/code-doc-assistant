@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { RepoSource } from '@cda/domain';
@@ -36,6 +36,16 @@ const isZip = (bytes: Buffer) =>
  * ingest job. The staged name is unique per upload, so deleting it can never
  * affect another request's job.
  */
+/**
+ * The file name a client sent, without any directory part. Browsers may send a
+ * Windows path ("C:\Users\me\repo.zip"); `path.basename` only splits on the
+ * server's own separator, so on Linux it would keep the whole string. Split on
+ * both, whatever the server runs on.
+ */
+export function uploadFileName(originalName: string): string {
+  return originalName.split(/[\\/]/).pop()?.trim() || 'upload.zip';
+}
+
 export async function stageUpload(
   bytes: Buffer,
   originalName: string,
@@ -50,7 +60,7 @@ export async function stageUpload(
   await writeFile(archivePath, bytes);
   return {
     type: 'local',
-    fileName: basename(originalName) || 'upload.zip',
+    fileName: uploadFileName(originalName),
     contentHash,
     archivePath,
   };

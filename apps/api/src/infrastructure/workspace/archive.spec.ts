@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ZipFile } from 'yazl';
-import { extractZip, stageUpload } from './archive';
+import { extractZip, stageUpload, uploadFileName } from './archive';
 import { InvalidSourceError } from './source-errors';
 
 let work: string;
@@ -40,6 +40,16 @@ async function stageAndExtract(
   await extractZip(staged.archivePath, dest, limits);
   return dest;
 }
+
+describe('uploadFileName', () => {
+  it('drops Windows and POSIX directories whatever the server runs on', () => {
+    expect(uploadFileName(String.raw`C:\Users\me\repo.zip`)).toBe('repo.zip');
+    expect(uploadFileName('/home/me/repo.zip')).toBe('repo.zip');
+    expect(uploadFileName('repo.zip')).toBe('repo.zip');
+    expect(uploadFileName(String.raw`C:\fakepath\ `)).toBe('upload.zip');
+    expect(uploadFileName('')).toBe('upload.zip');
+  });
+});
 
 describe('stageUpload', () => {
   it('stages a zip under a unique name and records its content hash', async () => {
