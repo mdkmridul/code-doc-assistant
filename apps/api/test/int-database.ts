@@ -1,5 +1,6 @@
 import { PrismaPg } from '@prisma/adapter-pg';
-import { loadConfig } from '../src/config/load-config';
+import { z } from 'zod';
+import { loadEnvFile } from '../src/config/load-config';
 import { PrismaClient } from '../src/generated/prisma/client';
 
 /**
@@ -8,9 +9,15 @@ import { PrismaClient } from '../src/generated/prisma/client';
  */
 export const TEST_DATABASE = 'cda_test';
 
-/** DATABASE_URL from the root .env with the database name swapped. */
+/** DATABASE_URL from the root .env, the only variable these tests need. */
+export function devDatabaseUrl(): string {
+  loadEnvFile();
+  return z.url({ protocol: /^postgres(ql)?$/ }).parse(process.env.DATABASE_URL);
+}
+
+/** DATABASE_URL with the database name swapped for the test database. */
 export function testDatabaseUrl(): string {
-  const url = new URL(loadConfig().DATABASE_URL);
+  const url = new URL(devDatabaseUrl());
   url.pathname = `/${TEST_DATABASE}`;
   return url.href;
 }

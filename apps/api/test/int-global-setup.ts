@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { loadConfig } from '../src/config/load-config';
 import {
+  devDatabaseUrl,
   TEST_DATABASE,
   testDatabaseUrl,
   testPrismaClient,
@@ -12,7 +12,7 @@ import {
  * every migration to it. Requires `docker compose up -d`.
  */
 export default async function globalSetup(): Promise<void> {
-  const admin = testPrismaClient(loadConfig().DATABASE_URL);
+  const admin = testPrismaClient(devDatabaseUrl());
   try {
     const existing = await admin.$queryRaw<unknown[]>`
       SELECT 1 FROM pg_database WHERE datname = ${TEST_DATABASE}`;

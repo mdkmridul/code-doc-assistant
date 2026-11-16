@@ -6,11 +6,20 @@ const validEnv = {
   DATABASE_URL: 'postgresql://cda:cda@localhost:5432/cda',
   REDIS_URL: 'redis://localhost:6379',
   OLLAMA_URL: 'http://localhost:11434',
+  ANTHROPIC_API_KEY: 'sk-ant-test',
+  ANTHROPIC_MODEL: 'claude-opus-5-5',
+  CHAT_MAX_ITERATIONS: '6',
+  CHAT_TOKEN_BUDGET: '200000',
 };
 
 describe('parseConfig', () => {
   it('returns a typed config for a valid environment', () => {
-    expect(parseConfig(validEnv)).toEqual({ ...validEnv, API_PORT: 3001 });
+    expect(parseConfig(validEnv)).toEqual({
+      ...validEnv,
+      API_PORT: 3001,
+      CHAT_MAX_ITERATIONS: 6,
+      CHAT_TOKEN_BUDGET: 200000,
+    });
   });
 
   it('names every missing variable', () => {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Citation } from '../ports/chat-store';
 import type { Embedder } from '../ports/embedder';
 import type { RetrievedChunk, Retriever } from '../ports/retriever';
 import type { Tool, ToolContext } from './tool';
@@ -86,5 +87,9 @@ export class SearchCodeTool implements Tool<SearchCodeInput, SearchCodeOutput> {
     return {
       results: results.map((r) => ({ ...r, score: Math.round(r.score * 1000) / 1000 })),
     };
+  }
+
+  citations(output: SearchCodeOutput): Citation[] {
+    return output.results.map(({ path, startLine, endLine }) => ({ path, startLine, endLine }));
   }
 }

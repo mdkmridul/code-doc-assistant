@@ -30,22 +30,27 @@ export function parseConfig(
 }
 
 /**
- * Loads the root `.env` (the API runs with cwd at either the repo root or apps/api),
- * then validates `process.env`. Variables already set in the environment win.
+ * Copies the root `.env` into `process.env` without validating anything (the
+ * API runs with cwd at either the repo root or apps/api). Variables already
+ * set in the environment win. For tools that need only one or two variables.
  */
-export function loadConfig(): AppConfig {
+export function loadEnvFile(): void {
   const candidates = [
     resolve(process.cwd(), '.env'),
     resolve(process.cwd(), '../../.env'),
   ];
   const envFile = candidates.find((file) => existsSync(file));
-  if (envFile) {
-    // Not process.loadEnvFile(): it writes to the real process.env, which Jest
-    // sandboxes away from test code. Copying keys works in both.
-    const fileEnv = parseEnv(readFileSync(envFile, 'utf8'));
-    for (const [key, value] of Object.entries(fileEnv)) {
-      process.env[key] ??= value;
-    }
+  if (!envFile) return;
+  // Not process.loadEnvFile(): it writes to the real process.env, which Jest
+  // sandboxes away from test code. Copying keys works in both.
+  const fileEnv = parseEnv(readFileSync(envFile, 'utf8'));
+  for (const [key, value] of Object.entries(fileEnv)) {
+    process.env[key] ??= value;
   }
+}
+
+/** Loads the root `.env`, then validates every variable the API needs. */
+export function loadConfig(): AppConfig {
+  loadEnvFile();
   return parseConfig(process.env);
 }

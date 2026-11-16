@@ -80,8 +80,9 @@ model Repo {
   createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  files      File[]
-  ingestJobs IngestJob[]
+  files        File[]
+  ingestJobs   IngestJob[]
+  chatSessions ChatSession[]
 
   @@map("repos")
 }
@@ -128,15 +129,19 @@ model Chunk {
   @@map("chunks")
 }
 
+/// A conversation about one repository.
 model ChatSession {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  repoId    String   @map("repo_id") @db.Uuid
   title     String?
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  repo     Repo      @relation(fields: [repoId], references: [id], onDelete: Cascade)
   messages Message[]
   llmCalls LlmCall[]
 
+  @@index([repoId])
   @@map("chat_sessions")
 }
 

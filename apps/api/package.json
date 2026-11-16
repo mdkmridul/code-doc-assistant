@@ -33,6 +33,7 @@
     "test:int": "jest --config ./test/jest-int.json --runInBand"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "@cda/domain": "*",
     "@nestjs/bullmq": "^12.0.1",
     "@nestjs/common": "^11.2.10",

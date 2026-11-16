@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { Citation } from '../ports/chat-store';
 
 /** Facts a tool gets from the conversation, never from the model's arguments. */
 export interface ToolContext {
@@ -18,6 +19,8 @@ export interface Tool<TInput, TOutput> {
   readonly description: string;
   readonly inputSchema: z.ZodType<TInput>;
   execute(input: TInput, context: ToolContext): Promise<TOutput>;
+  /** Source locations in the output an answer may cite. Omit for tools that return none. */
+  citations?(output: TOutput): Citation[];
 }
 
 /** The model (or a caller) sent arguments that do not match the tool's schema. */

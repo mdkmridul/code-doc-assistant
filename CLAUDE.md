@@ -17,6 +17,7 @@ Run from the repo root:
 - `npm run start:dev -w api` — runs the API; it logs `Connected to Postgres ... (pgvector x.y.z)`, `Connected to Redis` and `Connected to Ollama ... (nomic-embed-text)` on a healthy boot.
 - `npm run db:deploy -w api` — applies migrations. `npm run db:migrate -w api` creates one from `schema.prisma` changes (dev). `npm run db:seed -w api` inserts the sample repo.
 - `POST /repos` with `{"url": "https://github.com/<owner>/<repo>"}` or a multipart `file` (.zip) queues an ingest; `GET /repos/:id` shows its status (`queued → running → ready | failed`) and file/chunk counts.
+- `POST /sessions` `{"repoId"}` opens a Q&A session on a ready repo; `POST /sessions/:id/messages` `{"content"}` runs the agent loop and returns the full answer as JSON (answer, outcome, iterations, toolCalls, citations, usage). Every model call is a row in `llm_calls`.
 - `GET /debug/search?repoId=<uuid>&q=...[&topK=&path=&language=]` — TEMPORARY, non-production only: runs the `search_code` tool. Delete `apps/api/src/search/debug-search.controller.ts` once the chat endpoint calls the tool.
 - `npm run prisma:generate -w api` — regenerates the client into `apps/api/src/generated/prisma` (gitignored; also runs on `npm install`).
 
@@ -47,6 +48,12 @@ Run from the repo root:
 - `nomic-embed-text` via Ollama, 768 dimensions (ADR 0009). The model, `NOMIC_DIMENSIONS`, `vector(768)` in `schema.prisma` and the migration, and the seed's `EMBEDDING_DIMENSIONS` must all agree. Changing model means a new migration and re-ingesting every repo.
 - Ollama's nomic-embed-text has a 2048-token context; longer inputs are truncated, not rejected. Keep chunks well under it.
 - nomic needs task prefixes: `OllamaEmbedder` adds `search_document: ` (indexing) or `search_query: ` (questions, via `inputType: 'query'`). Never embed raw text with it.
+
+## Agent loop and prompts
+
+- `AnswerQuestion` (domain) owns the loop; `LoopPolicy` owns its limits (`CHAT_MAX_ITERATIONS`, `CHAT_TOKEN_BUDGET`). The last allowed call runs with tools disabled so a capped question still answers. ADR 0011.
+- System prompts are versioned files: `prompts/<name>/<version>.md`. Never edit a version that has been used; add `v2.md` and bump `ANSWER_QUESTION_PROMPT` in `apps/api/src/chat/chat.constants.ts`. `llm_calls.prompt_version` records which one ran.
+- Claude Opus 5.5 rules the adapter depends on: replay assistant turns of the current loop verbatim (`providerContent`, thinking blocks included); keep `system` and `tools` identical for the whole loop; never send forced `tool_choice` (`any`/`tool` is a 400), `thinking: disabled`, `budget_tokens` or sampling parameters. Prices live in `anthropic-pricing.ts`; the API refuses to boot with a model it can't price.
 
 ## Architecture
 
