@@ -2,7 +2,9 @@ import { Module } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
 import {
   AnswerQuestion,
+  DEFAULT_MAX_RESULT_TOKENS,
   GetSession,
+  ListEndpointsTool,
   LoopPolicy,
   ReadFileTool,
   SearchCodeTool,
@@ -13,6 +15,7 @@ import { APP_CONFIG } from '../config/config.module';
 import type { AppConfig } from '../config/env.schema';
 import { AnthropicLanguageModel } from '../infrastructure/llm/anthropic-language-model';
 import { PrismaChatStore } from '../infrastructure/prisma/prisma-chat-store';
+import { PrismaEndpointCatalog } from '../infrastructure/prisma/prisma-endpoint-catalog';
 import { PrismaLlmCallLog } from '../infrastructure/prisma/prisma-llm-call-log';
 import { PrismaModule } from '../infrastructure/prisma/prisma.module';
 import { PrismaRepoStore } from '../infrastructure/prisma/prisma-repo-store';
@@ -31,6 +34,7 @@ import { SessionsController } from './sessions.controller';
     PrismaLlmCallLog,
     PrismaRepoStore,
     PrismaSourceFileReader,
+    PrismaEndpointCatalog,
     {
       provide: AnthropicLanguageModel,
       inject: [APP_CONFIG],
@@ -44,9 +48,17 @@ import { SessionsController } from './sessions.controller';
     },
     {
       provide: ToolRegistry,
-      inject: [SearchCodeTool, PrismaSourceFileReader],
-      useFactory: (searchCode: SearchCodeTool, files: PrismaSourceFileReader) =>
-        new ToolRegistry([searchCode, new ReadFileTool(files)]),
+      inject: [SearchCodeTool, PrismaSourceFileReader, PrismaEndpointCatalog],
+      useFactory: (
+        searchCode: SearchCodeTool,
+        files: PrismaSourceFileReader,
+        endpoints: PrismaEndpointCatalog,
+      ) =>
+        new ToolRegistry([
+          searchCode,
+          new ReadFileTool(files),
+          new ListEndpointsTool(endpoints),
+        ]),
     },
     {
       provide: GetSession,
@@ -88,6 +100,10 @@ import { SessionsController } from './sessions.controller';
             maxIterations: config.CHAT_MAX_ITERATIONS,
             tokenBudget: config.CHAT_TOKEN_BUDGET,
           }),
+          contextBudget: {
+            maxTokens: config.CHAT_CONTEXT_BUDGET,
+            maxResultTokens: DEFAULT_MAX_RESULT_TOKENS,
+          },
         }),
     },
   ],

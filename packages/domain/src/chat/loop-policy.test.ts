@@ -13,6 +13,11 @@ describe('LoopPolicy', () => {
     // The budget wins over remaining iterations.
     [{ iterations: 1, tokensUsed: 1_000 }, 'stop'],
     [{ iterations: 0, tokensUsed: 5_000 }, 'stop'],
+    // An exhausted context budget ends research early, but still answers...
+    [{ iterations: 1, tokensUsed: 500, contextExhausted: true }, 'final_call'],
+    // ...unless no call is left.
+    [{ iterations: 3, tokensUsed: 500, contextExhausted: true }, 'stop'],
+    [{ iterations: 1, tokensUsed: 1_000, contextExhausted: true }, 'stop'],
   ] as const)('%j → %s', (state, expected) => {
     expect(policy.nextStep(state)).toBe(expected);
   });

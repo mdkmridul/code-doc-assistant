@@ -12,12 +12,15 @@ export interface LoopState {
   iterations: number;
   /** Input + output tokens used so far for this question. */
   tokensUsed: number;
+  /** The context budget refused a tool result: research is over, answer now. */
+  contextExhausted?: boolean;
 }
 
 /**
  * What to do before the next model call:
  * - `call`: call the model with tools available.
- * - `final_call`: last allowed call; tools are disabled so the model must answer.
+ * - `final_call`: last allowed call (iteration cap, or the context budget is
+ *   exhausted); tools are disabled so the model must answer.
  * - `stop`: no more calls; the token budget is spent.
  */
 export type NextStep = 'call' | 'final_call' | 'stop';
@@ -41,6 +44,7 @@ export class LoopPolicy {
   nextStep(state: LoopState): NextStep {
     if (state.iterations >= this.limits.maxIterations) return 'stop';
     if (state.tokensUsed >= this.limits.tokenBudget) return 'stop';
+    if (state.contextExhausted) return 'final_call';
     // Reserve the last call for an answer, so hitting the cap still answers.
     return state.iterations === this.limits.maxIterations - 1 ? 'final_call' : 'call';
   }

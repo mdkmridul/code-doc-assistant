@@ -155,8 +155,8 @@ export function sourcesOf(turn: Turn): Source[] {
     for (const excerpt of step.excerpts) {
       const key = `${excerpt.path}:${excerpt.startLine}-${excerpt.endLine}`;
       const existing = seen.get(key);
-      // A read of the same lines beats a search snippet (fuller text).
-      if (!existing || (existing.source === "search" && excerpt.source === "read")) {
+      // A read of the same lines beats a search snippet or a route's declaration line.
+      if (!existing || (existing.source !== "read" && excerpt.source === "read")) {
         seen.set(key, { ...excerpt, key });
       }
     }

@@ -26,6 +26,7 @@ const setup = async (script: (Partial<ModelResponse> | Error | typeof HANG)[]) =
     llmCalls,
     prompt: new SystemPrompt('answer-question', 'v1', 'Repo {{repository}}'),
     policy: new LoopPolicy({ maxIterations: 5, tokenBudget: 100_000 }),
+    contextBudget: { maxTokens: 100_000, maxResultTokens: 8_000 },
   });
   const events: ChatStreamEvent[] = [];
   const ask = (question: string, signal?: AbortSignal) =>

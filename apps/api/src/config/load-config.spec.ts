@@ -11,6 +11,7 @@ const validEnv = {
   ANTHROPIC_MODEL: 'claude-opus-5-5',
   CHAT_MAX_ITERATIONS: '6',
   CHAT_TOKEN_BUDGET: '200000',
+  CHAT_CONTEXT_BUDGET: '40000',
 };
 
 describe('parseConfig', () => {
@@ -20,6 +21,7 @@ describe('parseConfig', () => {
       API_PORT: 3001,
       CHAT_MAX_ITERATIONS: 6,
       CHAT_TOKEN_BUDGET: 200000,
+      CHAT_CONTEXT_BUDGET: 40000,
     });
   });
 

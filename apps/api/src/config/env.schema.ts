@@ -15,6 +15,7 @@ export const envSchema = z.object({
   ANTHROPIC_MODEL: z.string().trim().min(1),
   CHAT_MAX_ITERATIONS: z.coerce.number().int().min(1).max(50),
   CHAT_TOKEN_BUDGET: z.coerce.number().int().min(1_000),
+  CHAT_CONTEXT_BUDGET: z.coerce.number().int().min(1_000),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

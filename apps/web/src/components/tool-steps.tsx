@@ -6,6 +6,7 @@ import {
   ChevronDownIcon,
   FileTextIcon,
   Loader2Icon,
+  RouteIcon,
   SearchIcon,
   WrenchIcon,
 } from "lucide-react";
@@ -42,6 +43,12 @@ export function describeStep(step: ToolStep): { icon: typeof SearchIcon; label: 
     const end = field(step.input, "endLine");
     const range = start ? `:${start}${end ? `-${end}` : ""}` : "";
     return { icon: FileTextIcon, label: `Read ${path}${range}` };
+  }
+  if (step.name === "list_endpoints") {
+    const filters = [field(step.input, "method"), field(step.input, "pathContains"), field(step.input, "pathPrefix")]
+      .filter(Boolean)
+      .join(" · ");
+    return { icon: RouteIcon, label: "Listed API endpoints", detail: filters || undefined };
   }
   return { icon: WrenchIcon, label: `Ran ${step.name}` };
 }

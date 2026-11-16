@@ -55,7 +55,7 @@ describe('IngestRepo', () => {
       commitSha: 'f'.repeat(40),
     });
     expect(store.saved.map((s) => s.file.path)).toEqual(['src/index.ts']);
-    expect(stats).toEqual({ files: 1, chunks: 1, embeddingRequests: 1 });
+    expect(stats).toEqual({ files: 1, chunks: 1, endpoints: 0, embeddingRequests: 1 });
     expect(workspaces.disposed).toBe(1);
   });
 

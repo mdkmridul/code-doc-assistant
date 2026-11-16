@@ -8,6 +8,16 @@ import type { Tool, ToolContext } from './tool';
 /** Most lines one call returns; enough for most functions, small enough to stay cheap. */
 export const READ_FILE_MAX_LINES = 200;
 
+/**
+ * Hard cap on the numbered content one call returns, whatever the line count:
+ * long or minified lines can't make a read large. About 5,300 estimated tokens,
+ * under the context budget's per-result cap, so a read is never cut there.
+ */
+export const READ_FILE_MAX_CHARS = 16_000;
+
+/** Appended to a single line longer than the whole cap (minified code). */
+const LINE_CUT_NOTE = ' … [line truncated]';
+
 /** Excerpts are stored with each answer; this keeps one message from growing large. */
 const EXCERPT_MAX_CHARS = 8_000;
 
@@ -75,8 +85,9 @@ export class ReadFileTool implements Tool<ReadFileInput, ReadFileOutput> {
   readonly description =
     'Read exact, numbered lines of a file in the current repository. Use it after search_code ' +
     'when a snippet is cut off or you need the surrounding code, such as the rest of a function ' +
-    `or its callers. Returns up to ${String(READ_FILE_MAX_LINES)} lines per call; if the file ` +
-    'continues, nextStartLine tells you where to resume.';
+    `or its callers. Returns up to ${String(READ_FILE_MAX_LINES)} lines and ` +
+    `${String(READ_FILE_MAX_CHARS)} characters per call; if the range continues, nextStartLine ` +
+    'tells you where to resume. Read only the lines you need.';
   readonly inputSchema = readFileInputSchema;
 
   constructor(private readonly files: SourceFileReader) {}
@@ -100,11 +111,23 @@ export class ReadFileTool implements Tool<ReadFileInput, ReadFileOutput> {
     }
 
     const requestedEnd = Math.min(input.endLine ?? totalLines, totalLines);
-    const endLine = Math.min(requestedEnd, startLine + READ_FILE_MAX_LINES - 1);
-    const content = lines
-      .slice(startLine - 1, endLine)
-      .map((line, i) => `${String(startLine + i)}| ${line}`)
-      .join('\n');
+    const lastAllowed = Math.min(requestedEnd, startLine + READ_FILE_MAX_LINES - 1);
+
+    // Whole lines up to the character cap; a first line longer than the cap is cut.
+    const numbered: string[] = [];
+    let chars = 0;
+    for (let n = startLine; n <= lastAllowed; n++) {
+      let line = `${String(n)}| ${lines[n - 1]}`;
+      const cost = line.length + (numbered.length > 0 ? 1 : 0); // + the joining newline
+      if (chars + cost > READ_FILE_MAX_CHARS) {
+        if (numbered.length > 0) break;
+        line = line.slice(0, READ_FILE_MAX_CHARS - LINE_CUT_NOTE.length) + LINE_CUT_NOTE;
+      }
+      numbered.push(line);
+      chars += cost;
+    }
+    const endLine = startLine + numbered.length - 1;
+    const content = numbered.join('\n');
 
     return {
       path,

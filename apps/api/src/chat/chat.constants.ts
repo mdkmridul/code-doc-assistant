@@ -5,7 +5,7 @@
  */
 export const ANSWER_QUESTION_PROMPT = {
   name: 'answer-question',
-  version: 'v2',
+  version: 'v3',
 };
 
 /** Upper bound on a question's length (characters). */

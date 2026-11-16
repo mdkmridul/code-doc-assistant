@@ -1,4 +1,5 @@
 import type { EmbeddedChunk } from '../chunk';
+import type { ApiEndpoint } from '../endpoints/api-endpoint';
 import type { RepoSource, RepoStatus } from '../repo';
 import type { ChunkStore } from '../ports/chunk-store';
 import type { Embedder } from '../ports/embedder';
@@ -42,14 +43,16 @@ export class FakeChunkStore implements ChunkStore {
     repoId: string;
     file: SourceFile;
     chunks: readonly EmbeddedChunk[];
+    endpoints: readonly ApiEndpoint[];
   }[] = [];
 
   saveFile(
     repoId: string,
     file: SourceFile,
     chunks: readonly EmbeddedChunk[],
+    endpoints: readonly ApiEndpoint[],
   ): Promise<void> {
-    this.saved.push({ repoId, file, chunks });
+    this.saved.push({ repoId, file, chunks, endpoints });
     return Promise.resolve();
   }
 }

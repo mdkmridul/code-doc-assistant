@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SourceFileReader } from '../ports/source-file-reader';
 import type { SourceFile } from '../source-file';
-import { READ_FILE_MAX_LINES, ReadFileError, ReadFileTool } from './read-file';
+import { READ_FILE_MAX_CHARS, READ_FILE_MAX_LINES, ReadFileError, ReadFileTool } from './read-file';
 import { invokeTool, ToolInputError } from './tool';
 
 class FakeFiles implements SourceFileReader {
@@ -71,6 +71,32 @@ describe('ReadFileTool', () => {
     expect(first.content.split('\n')).toHaveLength(200);
     expect(second).toMatchObject({ startLine: 201, endLine: 260 });
     expect(second.nextStartLine).toBeUndefined();
+  });
+
+  it(`stops at ${String(READ_FILE_MAX_CHARS)} characters on a whole line and says where to continue`, async () => {
+    // 100 lines of ~400 characters: about 40 fit under the cap, well before 200 lines.
+    const wide = Array.from({ length: 100 }, (_, i) => `${String(i + 1).padStart(3, '0')}${'x'.repeat(400)}`);
+    const { tool } = setup({ 'wide.ts': wide.join('\n') });
+
+    const output = await invokeTool(tool, { path: 'wide.ts', startLine: 11 }, context);
+
+    expect(output.content.length).toBeLessThanOrEqual(READ_FILE_MAX_CHARS);
+    const shown = output.content.split('\n');
+    expect(shown).toHaveLength(output.endLine - output.startLine + 1);
+    expect(output.endLine).toBeLessThan(100);
+    expect(output.nextStartLine).toBe(output.endLine + 1);
+    // Every line is whole: the last one ends with its full 400 x's.
+    expect(shown.at(-1)).toBe(`${String(output.endLine)}| ${wide[output.endLine - 1]}`);
+  });
+
+  it('cuts a single line longer than the cap (minified code) and moves on to the next line', async () => {
+    const { tool } = setup({ 'min.js': `${'a'.repeat(50_000)}\nconsole.log(1);\n` });
+
+    const output = await invokeTool(tool, { path: 'min.js' }, context);
+
+    expect(output).toMatchObject({ startLine: 1, endLine: 1, nextStartLine: 2 });
+    expect(output.content.length).toBe(READ_FILE_MAX_CHARS);
+    expect(output.content.endsWith(' … [line truncated]')).toBe(true);
   });
 
   it('normalises the path like search filters do', async () => {

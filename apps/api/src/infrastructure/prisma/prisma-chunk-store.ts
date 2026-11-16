@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import type { ChunkStore, EmbeddedChunk, SourceFile } from '@cda/domain';
+import type {
+  ApiEndpoint,
+  ChunkStore,
+  EmbeddedChunk,
+  SourceFile,
+} from '@cda/domain';
 import { PrismaService } from './prisma.service';
 
 /** pgvector's text input format: "[0.1,0.2,...]". */
@@ -14,10 +19,11 @@ export class PrismaChunkStore implements ChunkStore {
     repoId: string,
     file: SourceFile,
     chunks: readonly EmbeddedChunk[],
+    endpoints: readonly ApiEndpoint[],
   ): Promise<void> {
     await this.prisma.$transaction(
       async (tx) => {
-        // Replacing makes a retried ingest idempotent; chunks cascade.
+        // Replacing makes a retried ingest idempotent; chunks and endpoints cascade.
         await tx.file.deleteMany({ where: { repoId, path: file.path } });
         const { id: fileId } = await tx.file.create({
           data: {
@@ -28,6 +34,12 @@ export class PrismaChunkStore implements ChunkStore {
           },
           select: { id: true },
         });
+
+        if (endpoints.length > 0) {
+          await tx.endpoint.createMany({
+            data: endpoints.map((e) => ({ fileId, ...e })),
+          });
+        }
         if (chunks.length === 0) return;
 
         // One statement for all chunks. Prisma cannot write the vector

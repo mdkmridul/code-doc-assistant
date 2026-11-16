@@ -13,8 +13,9 @@ import type {
   ToolResult,
 } from '../ports/language-model';
 import type { LlmCallLog } from '../ports/llm-call-log';
-import type { ToolRegistry } from '../tools/tool-registry';
+import type { ToolExecution, ToolRegistry } from '../tools/tool-registry';
 import { resolveCitations } from './citations';
+import { ContextBudget, type Admission, type ContextBudgetLimits } from './context-budget';
 import { SessionNotFoundError } from './errors';
 import type { LoopOutcome, LoopPolicy, LoopState } from './loop-policy';
 import type { SystemPrompt } from './system-prompt';
@@ -24,6 +25,11 @@ export const ANSWER_QUESTION_PURPOSE = 'answer_question';
 /** Appended before the final allowed call; the model then answers without tools. */
 export const ITERATION_CAP_NOTE =
   'You have reached the tool-call limit for this question, so tools are now disabled. ' +
+  'Answer now using only what you have already found. Say plainly what you could not verify.';
+
+/** Appended before the final call when the context budget refused a tool result. */
+export const CONTEXT_BUDGET_NOTE =
+  'The context budget for tool results on this question is used up, so tools are now disabled. ' +
   'Answer now using only what you have already found. Say plainly what you could not verify.';
 
 const TOKEN_BUDGET_ANSWER =
@@ -58,7 +64,72 @@ export interface AnswerQuestionDeps {
   llmCalls: LlmCallLog;
   prompt: SystemPrompt;
   policy: LoopPolicy;
+  /** Limits of the ContextBudget each question gets for its tool results. */
+  contextBudget: ContextBudgetLimits;
   clock?: { now(): number };
+}
+
+/** A tool call's result after the context budget has had its say. */
+interface ToolOutcome {
+  result: ToolResult;
+  trace: ToolCallTrace;
+  citations: Citation[];
+}
+
+/** Keep only the locations whose file still appears in a truncated result. */
+const visibleIn = <T extends { path: string }>(items: T[], content: string): T[] =>
+  items.filter((item) => content.includes(item.path));
+
+const roughTokens = (tokens: number) =>
+  tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+
+/**
+ * What the model, the trace and the citation check get for one tool call:
+ * a refused result shows nothing (no excerpts, nothing citable); a truncated
+ * one keeps only the locations still visible in what the model saw.
+ */
+function toolOutcome(
+  id: string,
+  name: string,
+  input: unknown,
+  execution: ToolExecution,
+  admission: Admission,
+): ToolOutcome {
+  const base = { name, input };
+  if (!admission.admitted) {
+    return {
+      result: { toolCallId: id, content: admission.content, isError: true },
+      trace: {
+        ...base,
+        isError: true,
+        summary: `Not added: over the context budget (~${roughTokens(admission.tokens)} tokens, ${roughTokens(admission.remaining)} left)`,
+        excerpts: [],
+        tokens: 0,
+      },
+      citations: [],
+    };
+  }
+  if (!execution.ok) {
+    return {
+      result: { toolCallId: id, content: admission.content, isError: true },
+      trace: { ...base, isError: true, summary: execution.error, excerpts: [], tokens: admission.tokens },
+      citations: [],
+    };
+  }
+  const shown = admission.content;
+  return {
+    result: { toolCallId: id, content: shown, isError: false },
+    trace: {
+      ...base,
+      isError: false,
+      summary: admission.truncated
+        ? `${execution.summary} · truncated to ~${roughTokens(admission.tokens)} tokens`
+        : execution.summary,
+      excerpts: admission.truncated ? visibleIn(execution.excerpts, shown) : execution.excerpts,
+      tokens: admission.tokens,
+    },
+    citations: admission.truncated ? visibleIn(execution.citations, shown) : execution.citations,
+  };
 }
 
 /** Prior turns are replayed as plain text: question and final answer, no tool traffic. */
@@ -105,7 +176,8 @@ export class AnswerQuestion {
       { role: 'user', content: question },
     ];
 
-    const state: LoopState = { iterations: 0, tokensUsed: 0 };
+    const state: LoopState = { iterations: 0, tokensUsed: 0, contextExhausted: false };
+    const budget = new ContextBudget(this.deps.contextBudget);
     const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
     const traces: ToolCallTrace[] = [];
     const retrieved: Citation[] = [];
@@ -126,7 +198,10 @@ export class AnswerQuestion {
         break;
       }
       if (step === 'final_call') {
-        messages.push({ role: 'system_note', content: ITERATION_CAP_NOTE });
+        messages.push({
+          role: 'system_note',
+          content: budget.exhausted ? CONTEXT_BUDGET_NOTE : ITERATION_CAP_NOTE,
+        });
       }
 
       const iteration = state.iterations + 1;
@@ -162,7 +237,7 @@ export class AnswerQuestion {
         break;
       }
       if (step === 'final_call') {
-        outcome = 'iteration_cap';
+        outcome = budget.exhausted ? 'context_budget' : 'iteration_cap';
         break;
       }
       if (response.stopReason === 'max_tokens') {
@@ -181,10 +256,13 @@ export class AnswerQuestion {
         toolCalls: response.toolCalls,
         providerContent: response.providerContent,
       });
-      messages.push({
-        role: 'tool_results',
-        results: await this.runTools(response, iteration, session.repoId, traces, retrieved, emit),
-      });
+      const outcomes = await this.runTools(response, iteration, session.repoId, budget, emit);
+      for (const { trace, citations } of outcomes) {
+        traces.push(trace);
+        retrieved.push(...citations);
+      }
+      messages.push({ role: 'tool_results', results: outcomes.map((o) => o.result) });
+      state.contextExhausted = budget.exhausted;
     }
 
     const { citations, unverifiedReferences } = resolveCitations(answer, retrieved);
@@ -202,58 +280,47 @@ export class AnswerQuestion {
       toolCalls: traces,
       citations,
       unverifiedReferences,
-      usage,
+      usage: { ...usage, contextTokens: budget.spent },
     };
     emit({ type: 'done', result });
     return result;
   }
 
   /**
-   * Runs one turn's tool calls in parallel; every call gets exactly one result.
-   * All `tool_call` events go out before the tools start, each `tool_result`
-   * as its tool finishes.
+   * Runs one turn's tool calls in parallel; every call gets exactly one result,
+   * returned in call order. All `tool_call` events go out before the tools
+   * start, each `tool_result` as its tool finishes. Every result passes through
+   * the context budget as it arrives: it may be truncated, or refused whole.
    */
   private async runTools(
     response: ModelResponse,
     iteration: number,
     repoId: string,
-    traces: ToolCallTrace[],
-    retrieved: Citation[],
+    budget: ContextBudget,
     emit: (event: ChatStreamEvent) => void,
-  ): Promise<ToolResult[]> {
+  ): Promise<ToolOutcome[]> {
     for (const call of response.toolCalls) {
       emit({ type: 'tool_call', iteration, id: call.id, name: call.name, input: call.input });
     }
-    const executions = await Promise.all(
+    return Promise.all(
       response.toolCalls.map(async (call) => {
         const execution = await this.deps.tools.execute(call.name, call.input, { repoId });
+        const admission = budget.admit(
+          execution.ok ? JSON.stringify(execution.output) : execution.error,
+        );
+        const outcome = toolOutcome(call.id, call.name, call.input, execution, admission);
         emit({
           type: 'tool_result',
           iteration,
           id: call.id,
           name: call.name,
-          isError: !execution.ok,
-          summary: execution.ok ? execution.summary : execution.error,
-          excerpts: execution.ok ? execution.excerpts : [],
+          isError: outcome.trace.isError,
+          summary: outcome.trace.summary ?? '',
+          excerpts: outcome.trace.excerpts ?? [],
         });
-        return execution;
+        return outcome;
       }),
     );
-    return response.toolCalls.map((call, i) => {
-      const execution = executions[i];
-      traces.push({
-        name: call.name,
-        input: call.input,
-        isError: !execution.ok,
-        summary: execution.ok ? execution.summary : execution.error,
-        excerpts: execution.ok ? execution.excerpts : [],
-      });
-      if (!execution.ok) {
-        return { toolCallId: call.id, content: execution.error, isError: true };
-      }
-      retrieved.push(...execution.citations);
-      return { toolCallId: call.id, content: JSON.stringify(execution.output), isError: false };
-    });
   }
 
   /** One model call, logged whether it succeeds, fails or is aborted. */

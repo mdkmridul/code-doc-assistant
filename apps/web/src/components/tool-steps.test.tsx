@@ -65,6 +65,16 @@ describe("ToolSteps", () => {
 });
 
 describe("describeStep", () => {
+  it("describes list_endpoints with its filters", () => {
+    expect(describeStep(step({ name: "list_endpoints", input: {} }))).toMatchObject({
+      label: "Listed API endpoints",
+      detail: undefined,
+    });
+    expect(describeStep(step({ name: "list_endpoints", input: { method: "GET", pathPrefix: "src/admin/" } })).detail).toBe(
+      "GET · src/admin/",
+    );
+  });
+
   it("falls back to the tool name for tools it doesn't know", () => {
     expect(describeStep(step({ name: "list_files", input: {} })).label).toBe("Ran list_files");
   });

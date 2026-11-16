@@ -3,6 +3,7 @@ import { ToolRegistry } from '../tools/tool-registry';
 import {
   ANSWER_QUESTION_PURPOSE,
   AnswerQuestion,
+  CONTEXT_BUDGET_NOTE,
   ITERATION_CAP_NOTE,
 } from './answer-question';
 import { SessionNotFoundError } from './errors';
@@ -14,6 +15,7 @@ import {
   LookupTool,
   SteppingClock,
 } from './fakes.test-helpers';
+import type { ContextBudgetLimits } from './context-budget';
 import { LoopPolicy, type LoopLimits } from './loop-policy';
 import { SystemPrompt } from './system-prompt';
 import type { ModelResponse } from '../ports/language-model';
@@ -21,6 +23,7 @@ import type { ModelResponse } from '../ports/language-model';
 const setup = async (
   script: (Partial<ModelResponse> | Error)[],
   limits: LoopLimits = { maxIterations: 5, tokenBudget: 100_000 },
+  contextBudget: ContextBudgetLimits = { maxTokens: 100_000, maxResultTokens: 8_000 },
 ) => {
   const chats = new FakeChatStore();
   const { id: sessionId } = await chats.createSession('repo-1');
@@ -34,6 +37,7 @@ const setup = async (
     llmCalls,
     prompt: new SystemPrompt('answer-question', 'v7', 'You document {{repository}}.'),
     policy: new LoopPolicy(limits),
+    contextBudget,
     clock: new SteppingClock(),
   });
   const ask = (question: string) => useCase.execute({ sessionId, question });
@@ -227,6 +231,106 @@ describe('AnswerQuestion', () => {
     expect(result.answer).toMatch(/ran out of my budget/);
   });
 
+  describe('context budget', () => {
+    const budget = { maxTokens: 5_000, maxResultTokens: 3_000 };
+
+    it('counts the tokens every tool result adds and reports the spend', async () => {
+      const { ask } = await setup(
+        [{ toolCalls: [call('t1', 'lookup', { key: 'big-1000' })] }, { text: 'Done.' }],
+        undefined,
+        budget,
+      );
+
+      const result = await ask('q');
+
+      expect(result.outcome).toBe('completed');
+      // 1000 tokens of value plus the JSON around it.
+      expect(result.toolCalls[0].tokens).toBeGreaterThan(1000);
+      expect(result.toolCalls[0].tokens).toBeLessThan(1050);
+      expect(result.usage.contextTokens).toBe(result.toolCalls[0].tokens);
+    });
+
+    it('truncates a result over the per-result cap before the model sees it', async () => {
+      const { ask, model } = await setup(
+        [{ toolCalls: [call('t1', 'lookup', { key: 'big-4000' })] }, { text: 'Done.' }],
+        undefined,
+        budget,
+      );
+
+      const result = await ask('q');
+
+      const sent = model.requests[1].messages.at(-1);
+      expect(sent).toMatchObject({ role: 'tool_results', results: [{ isError: false }] });
+      const content = sent?.role === 'tool_results' ? sent.results[0].content : '';
+      expect(content).toMatch(/\[Truncated: showing about \d+ of \d+ tokens/);
+      expect(content.length).toBeLessThanOrEqual(3_000 * 3);
+      expect(result.toolCalls[0].summary).toMatch(/truncated to ~3\.0k tokens/);
+      expect(result.outcome).toBe('completed');
+    });
+
+    it('refuses a result that would exceed the budget, then makes the model answer without tools', async () => {
+      const { ask, model } = await setup(
+        [
+          { toolCalls: [call('t1', 'lookup', { key: 'big-2500' })] },
+          { toolCalls: [call('t2', 'lookup', { key: 'big-2900' })] },
+          { text: 'What I found: see src/big-2500.ts:1-10.' },
+          { text: 'never reached' },
+        ],
+        { maxIterations: 8, tokenBudget: 1_000_000 },
+        budget,
+      );
+
+      const result = await ask('Tell me everything.');
+
+      expect(result).toMatchObject({
+        outcome: 'context_budget',
+        iterations: 3,
+        answer: 'What I found: see src/big-2500.ts:1-10.',
+      });
+      // The refused result is replaced by a note; nothing of it reaches the model.
+      const refused = model.requests[2].messages.at(-2);
+      expect(refused).toMatchObject({
+        role: 'tool_results',
+        results: [{ toolCallId: 't2', isError: true }],
+      });
+      const refusal = refused?.role === 'tool_results' ? refused.results[0].content : '';
+      expect(refusal).toMatch(/^Not added: .* Do not call more tools/);
+      expect(refusal).not.toContain('vvvv');
+      // The final call has tools disabled and says why.
+      expect(model.requests.map((r) => r.allowToolCalls)).toEqual([true, true, false]);
+      expect(model.requests[2].messages.at(-1)).toEqual({
+        role: 'system_note',
+        content: CONTEXT_BUDGET_NOTE,
+      });
+      // The trace shows the refusal; only the admitted result counts as spent or citable.
+      expect(result.toolCalls[1]).toMatchObject({ isError: true, tokens: 0, excerpts: [] });
+      expect(result.toolCalls[1].summary).toMatch(/^Not added: over the context budget/);
+      expect(result.usage.contextTokens).toBe(result.toolCalls[0].tokens);
+      expect(result.citations).toEqual([{ path: 'src/big-2500.ts', startLine: 1, endLine: 10 }]);
+    });
+
+    it('stops a question that keeps searching at the budget, well before the iteration cap', async () => {
+      // Every turn asks for three ~1,000-token results; the budget holds about four.
+      const greedy = Array.from({ length: 20 }, (_, i) => ({
+        toolCalls: [0, 1, 2].map((j) => call(`t${String(i)}-${String(j)}`, 'lookup', { key: 'big-1000' })),
+      }));
+      const { ask, model } = await setup(
+        [greedy[0], greedy[1], { text: 'Summary of what I found.' }, ...greedy.slice(2)],
+        { maxIterations: 20, tokenBudget: 10_000_000 },
+        budget,
+      );
+
+      const result = await ask('Find every use of everything.');
+
+      expect(result.outcome).toBe('context_budget');
+      expect(result.answer).toBe('Summary of what I found.');
+      expect(model.requests).toHaveLength(3);
+      expect(result.toolCalls).toHaveLength(6);
+      expect(result.toolCalls.filter((t) => t.isError)).toHaveLength(2);
+      expect(result.usage.contextTokens).toBeLessThanOrEqual(budget.maxTokens);
+    });
+  });
+
   it('logs one llm_call per model call with tokens, cost, latency and prompt version', async () => {
     const { ask, llmCalls, sessionId } = await setup([
       { toolCalls: [call('t1', 'lookup', { key: 'a' })], model: 'claude-x', usage: { inputTokens: 500, outputTokens: 40, costUsd: 0.0028 } },
@@ -249,7 +353,7 @@ describe('AnswerQuestion', () => {
       },
       expect.objectContaining({ inputTokens: 700, outputTokens: 60, status: 'succeeded' }),
     ]);
-    expect(result.usage).toEqual({ inputTokens: 1200, outputTokens: 100, costUsd: 0.0068 });
+    expect(result.usage).toEqual({ inputTokens: 1200, outputTokens: 100, costUsd: 0.0068, contextTokens: 14 });
   });
 
   it('logs a failed model call and rethrows, keeping the question stored', async () => {
@@ -292,8 +396,8 @@ describe('AnswerQuestion', () => {
         role: 'assistant',
         content: answer,
         toolCalls: [
-          { name: 'lookup', input: { key: 'retry' }, isError: false, summary: 'ok', excerpts: [] },
-          { name: 'lookup', input: { key: 'unused' }, isError: false, summary: 'ok', excerpts: [] },
+          { name: 'lookup', input: { key: 'retry' }, isError: false, summary: 'ok', excerpts: [], tokens: 16 },
+          { name: 'lookup', input: { key: 'unused' }, isError: false, summary: 'ok', excerpts: [], tokens: 17 },
         ],
         citations: result.citations,
       }),
@@ -346,6 +450,7 @@ describe('AnswerQuestion', () => {
       llmCalls: new FakeLlmCallLog(),
       prompt: new SystemPrompt('p', 'v1', 'x'),
       policy: new LoopPolicy({ maxIterations: 3, tokenBudget: 1000 }),
+      contextBudget: { maxTokens: 1000, maxResultTokens: 500 },
     });
 
     await expect(useCase.execute({ sessionId: 'nope', question: 'q' })).rejects.toThrow(

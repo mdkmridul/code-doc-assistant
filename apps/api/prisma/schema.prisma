@@ -95,8 +95,9 @@ model File {
   content   String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  repo   Repo    @relation(fields: [repoId], references: [id], onDelete: Cascade)
-  chunks Chunk[]
+  repo      Repo       @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  chunks    Chunk[]
+  endpoints Endpoint[]
 
   @@unique([repoId, path])
   @@map("files")
@@ -127,6 +128,27 @@ model Chunk {
   @@index([embedding], map: "chunks_embedding_hnsw_idx")
   @@index([searchVector], map: "chunks_search_vector_gin_idx", type: Gin)
   @@map("chunks")
+}
+
+/// An HTTP route declared in a file, recorded at ingest by the endpoint scan
+/// (extractEndpoints in @cda/domain). Replaced with its file; read by list_endpoints.
+model Endpoint {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fileId      String  @map("file_id") @db.Uuid
+  /// GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS or ALL.
+  method      String
+  path        String
+  /// nest, express, fastapi or flask.
+  framework   String
+  line        Int
+  handler     String?
+  /// The declaration's source line, trimmed (at most ~200 characters).
+  declaration String
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([fileId])
+  @@map("endpoints")
 }
 
 /// A conversation about one repository.

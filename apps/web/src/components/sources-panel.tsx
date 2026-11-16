@@ -1,7 +1,7 @@
 "use client";
 
 import type { Citation } from "@cda/domain/events";
-import { AlertCircleIcon, BookOpenIcon, FileCode2Icon, SearchIcon } from "lucide-react";
+import { AlertCircleIcon, BookOpenIcon, FileCode2Icon, RouteIcon, SearchIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +20,15 @@ const lineNumbers = (source: Source) =>
     ? `line ${source.startLine}`
     : `lines ${source.startLine}–${source.endLine}`;
 
+/** How each kind of excerpt reached the model. */
+const SOURCE_KINDS = {
+  read: { icon: FileCode2Icon, label: "Read with read_file" },
+  search: { icon: SearchIcon, label: "Search hit (snippet)" },
+  endpoint: { icon: RouteIcon, label: "Route declaration (list_endpoints)" },
+} satisfies Record<Source["source"], { icon: typeof SearchIcon; label: string }>;
+
 function SourceCard({ source, citation }: { source: Source; citation: Citation | null }) {
+  const SourceIcon = SOURCE_KINDS[source.source].icon;
   const ref = useRef<HTMLLIElement>(null);
   const codeRef = useRef<HTMLPreElement>(null);
   const cited = citation !== null && overlaps(source, citation);
@@ -46,11 +54,7 @@ function SourceCard({ source, citation }: { source: Source; citation: Citation |
       )}
     >
       <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-2">
-        {source.source === "read" ? (
-          <FileCode2Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        ) : (
-          <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        )}
+        <SourceIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium" title={source.path}>
           {source.path}
         </span>
@@ -75,7 +79,7 @@ function SourceCard({ source, citation }: { source: Source; citation: Citation |
         </code>
       </pre>
       <p className="border-t px-3 py-1.5 text-[11px] text-muted-foreground">
-        {source.source === "read" ? "Read with read_file" : "Search hit (snippet)"}
+        {SOURCE_KINDS[source.source].label}
       </p>
     </li>
   );

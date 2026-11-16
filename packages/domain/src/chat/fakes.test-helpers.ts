@@ -69,7 +69,10 @@ export const call = (id: string, name: string, input: unknown): ToolCall => ({
   input,
 });
 
-/** Answers lookups from a fixed table; cites what it returns. */
+/**
+ * Answers lookups from a fixed table; cites what it returns. A key like
+ * `big-3000` returns a value of 3000 × 3 characters (about 3000 estimated tokens).
+ */
 export class LookupTool implements Tool<{ key: string }, { value: string; path: string }> {
   readonly name = 'lookup';
   readonly description = 'Looks a key up.';
@@ -79,7 +82,9 @@ export class LookupTool implements Tool<{ key: string }, { value: string; path: 
   execute(input: { key: string }, context: { repoId: string }) {
     this.calls.push({ key: input.key, repoId: context.repoId });
     if (input.key === 'explode') return Promise.reject(new Error('backend down'));
-    return Promise.resolve({ value: `value-of-${input.key}`, path: `src/${input.key}.ts` });
+    const big = /^big-(\d+)$/.exec(input.key);
+    const value = big ? 'v'.repeat(Number(big[1]) * 3) : `value-of-${input.key}`;
+    return Promise.resolve({ value, path: `src/${input.key}.ts` });
   }
 
   citations(output: { value: string; path: string }): Citation[] {

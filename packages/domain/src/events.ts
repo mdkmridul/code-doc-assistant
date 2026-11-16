@@ -14,6 +14,8 @@ export type LoopOutcome =
   | 'iteration_cap'
   /** The token budget ran out. */
   | 'token_budget'
+  /** The context budget refused a tool result, so the model answered with what it had. */
+  | 'context_budget'
   /** The model declined to answer. */
   | 'refused'
   /** The model ran out of output tokens mid-answer. */
@@ -35,7 +37,8 @@ export interface Excerpt {
   startLine: number;
   endLine: number;
   text: string;
-  source: 'search' | 'read';
+  /** A search hit's snippet, lines read with read_file, or an endpoint's declaration line. */
+  source: 'search' | 'read' | 'endpoint';
 }
 
 /** A tool call made while answering, kept for transparency and debugging. */
@@ -47,6 +50,8 @@ export interface ToolCallTrace {
   summary?: string;
   /** What the tool showed the model; absent on answers stored before it existed. */
   excerpts?: Excerpt[];
+  /** Estimated tokens the result added to the context (0 if refused); absent on older answers. */
+  tokens?: number;
 }
 
 /** The finished answer to one question. */
@@ -61,7 +66,8 @@ export interface AnswerSummary {
   citations: Citation[];
   /** Line references in the answer that no retrieved code backs (possible invention). */
   unverifiedReferences: string[];
-  usage: { inputTokens: number; outputTokens: number; costUsd: number };
+  /** contextTokens: estimated tokens of tool results added to the context (the context budget's spend). */
+  usage: { inputTokens: number; outputTokens: number; costUsd: number; contextTokens: number };
 }
 
 /**

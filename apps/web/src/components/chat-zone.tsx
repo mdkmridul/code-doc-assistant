@@ -28,6 +28,7 @@ export type ChatState =
 const OUTCOME_NOTES: Partial<Record<NonNullable<Turn["outcome"]>, string>> = {
   iteration_cap: "Stopped at the research limit — the answer may be incomplete.",
   token_budget: "Stopped at the token budget — the answer may be incomplete.",
+  context_budget: "Research stopped at the context budget — the answer is based on what was read so far.",
   truncated: "The answer was cut off at the output limit.",
   refused: "The model declined to answer.",
   cancelled: "Cancelled before it finished.",

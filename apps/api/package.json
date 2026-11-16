@@ -25,6 +25,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
+    "db:backfill-endpoints": "npm run build:domain && tsx prisma/backfill-endpoints.ts",
     "build:domain": "npm run build --prefix ../../packages/domain",
     "prebuild": "npm run build:domain",
     "prestart": "npm run build:domain",

@@ -1,5 +1,7 @@
 import type { Chunk, EmbeddedChunk } from '../chunk';
 import type { ChunkingStrategy } from '../chunking/chunking-strategy';
+import type { ApiEndpoint } from '../endpoints/api-endpoint';
+import { extractEndpoints } from '../endpoints/extract-endpoints';
 import type { ChunkStore } from '../ports/chunk-store';
 import { EmbeddingError, type Embedder } from '../ports/embedder';
 import type { SourceFile } from '../source-file';
@@ -23,12 +25,15 @@ export const DEFAULT_INGEST_FILES_OPTIONS: IngestFilesOptions = {
 export interface IngestFilesStats {
   files: number;
   chunks: number;
+  /** HTTP routes recorded by the endpoint scan. */
+  endpoints: number;
   embeddingRequests: number;
 }
 
 interface PendingFile {
   file: SourceFile;
   chunks: Chunk[];
+  endpoints: ApiEndpoint[];
 }
 
 export interface IngestFilesDeps {
@@ -39,7 +44,7 @@ export interface IngestFilesDeps {
 }
 
 /**
- * Chunks files, embeds the chunks in batches that span several files (fewer
+ * Chunks files, scans them for HTTP routes (extractEndpoints), embeds the chunks in batches that span several files (fewer
  * requests for repos with many small files), and stores each file together
  * with its chunks in one transaction.
  */
@@ -58,7 +63,7 @@ export class IngestFiles {
     onFileSaved?: (stats: Readonly<IngestFilesStats>) => void,
   ): Promise<IngestFilesStats> {
     const batchSize = Math.min(options.batchSize, this.deps.embedder.maxBatchSize);
-    const stats: IngestFilesStats = { files: 0, chunks: 0, embeddingRequests: 0 };
+    const stats: IngestFilesStats = { files: 0, chunks: 0, endpoints: 0, embeddingRequests: 0 };
     let pending: PendingFile[] = [];
     let pendingChunks = 0;
     let pendingChars = 0;
@@ -68,15 +73,16 @@ export class IngestFiles {
       const embeddings = await this.embedAll(allChunks, batchSize, options, stats);
 
       let offset = 0;
-      for (const { file, chunks } of pending) {
+      for (const { file, chunks, endpoints } of pending) {
         const embedded: EmbeddedChunk[] = chunks.map((chunk, i) => ({
           ...chunk,
           embedding: embeddings[offset + i],
         }));
         offset += chunks.length;
-        await this.deps.store.saveFile(repoId, file, embedded);
+        await this.deps.store.saveFile(repoId, file, embedded, endpoints);
         stats.files += 1;
         stats.chunks += chunks.length;
+        stats.endpoints += endpoints.length;
         onFileSaved?.(stats);
       }
       pending = [];
@@ -86,7 +92,7 @@ export class IngestFiles {
 
     for await (const file of files) {
       const chunks = this.deps.chunker.chunk(file);
-      pending.push({ file, chunks });
+      pending.push({ file, chunks, endpoints: extractEndpoints(file) });
       pendingChunks += chunks.length;
       pendingChars += chunks.reduce((sum, c) => sum + c.content.length, 0);
       if (pendingChunks >= batchSize || pendingChars >= options.maxBatchChars) {

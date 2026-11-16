@@ -37,7 +37,7 @@ describe('IngestFiles', () => {
 
     const stats = await useCase.execute('repo-1', [file('a.ts', 3), file('b.ts', 4)], options());
 
-    expect(stats).toEqual({ files: 2, chunks: 4, embeddingRequests: 1 });
+    expect(stats).toEqual({ files: 2, chunks: 4, endpoints: 0, embeddingRequests: 1 });
     expect(store.saved.map((s) => [s.repoId, s.file.path, s.chunks.length])).toEqual([
       ['repo-1', 'a.ts', 2],
       ['repo-1', 'b.ts', 2],
@@ -151,6 +151,23 @@ describe('IngestFiles', () => {
 
     expect(store.saved.map((s) => [s.file.path, s.chunks.length])).toEqual([['empty.ts', 0]]);
     expect(embedder.calls).toEqual([]);
-    expect(stats).toEqual({ files: 1, chunks: 0, embeddingRequests: 0 });
+    expect(stats).toEqual({ files: 1, chunks: 0, endpoints: 0, embeddingRequests: 0 });
+  });
+
+  it('records the HTTP routes each file declares, saved with that file', async () => {
+    const { useCase, store } = setup();
+    const routes: SourceFile = {
+      path: 'src/users.js',
+      language: 'javascript',
+      content: "router.get('/users', list);\nrouter.post('/users', create);\n",
+    };
+
+    const stats = await useCase.execute('repo-1', [file('a.ts', 2), routes], options());
+
+    expect(stats.endpoints).toBe(2);
+    expect(store.saved.map((s) => [s.file.path, s.endpoints.map((e) => `${e.method} ${e.path}`)])).toEqual([
+      ['a.ts', []],
+      ['src/users.js', ['GET /users', 'POST /users']],
+    ]);
   });
 });
