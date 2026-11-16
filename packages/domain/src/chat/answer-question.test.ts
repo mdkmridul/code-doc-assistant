@@ -263,29 +263,39 @@ describe('AnswerQuestion', () => {
     expect((await chats.listMessages(sessionId)).map((m) => m.role)).toEqual(['user']);
   });
 
-  it('stores the question and the answer with its tool trace and the citations it mentions', async () => {
+  it('stores the question and the answer with its tool trace and its verified citations', async () => {
+    // LookupTool evidence: src/<key>.ts lines 1-10.
+    const answer =
+      'The loop is in src/retry.ts:2-5 (see `retry.ts:8`). Also src/retry.ts mentions it, ' +
+      'and src/invented.ts:1-3 does too.';
     const { ask, chats, sessionId } = await setup([
       {
         toolCalls: [call('t1', 'lookup', { key: 'retry' }), call('t2', 'lookup', { key: 'unused' })],
       },
-      { text: 'See src/retry.ts for the retry loop.' },
+      { text: answer },
     ]);
 
     const result = await ask('How are retries done?');
 
+    // Only line references backed by retrieved code count; a bare path is not a citation,
+    // and src/unused.ts was retrieved but never referenced.
+    expect(result.citations).toEqual([
+      { path: 'src/retry.ts', startLine: 2, endLine: 5 },
+      { path: 'src/retry.ts', startLine: 8, endLine: 8 },
+    ]);
+    expect(result.unverifiedReferences).toEqual(['src/invented.ts:1-3']);
     const stored = await chats.listMessages(sessionId);
     expect(stored).toEqual([
       expect.objectContaining({ role: 'user', content: 'How are retries done?' }),
       expect.objectContaining({
         id: result.messageId,
         role: 'assistant',
-        content: 'See src/retry.ts for the retry loop.',
+        content: answer,
         toolCalls: [
           { name: 'lookup', input: { key: 'retry' }, isError: false },
           { name: 'lookup', input: { key: 'unused' }, isError: false },
         ],
-        // src/unused.ts was retrieved but not mentioned: not a citation.
-        citations: [{ path: 'src/retry.ts', startLine: 1, endLine: 10 }],
+        citations: result.citations,
       }),
     ]);
   });

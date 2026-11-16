@@ -51,7 +51,10 @@ Run from the repo root:
 
 ## Agent loop and prompts
 
-- `AnswerQuestion` (domain) owns the loop; `LoopPolicy` owns its limits (`CHAT_MAX_ITERATIONS`, `CHAT_TOKEN_BUDGET`). The last allowed call runs with tools disabled so a capped question still answers. ADR 0011.
+- Tools: `search_code` (semantic search) and `read_file` (exact numbered lines, max 200 per call). Citations are the `path:start-end` references an answer writes that overlap code the model actually retrieved; anything else is returned as `unverifiedReferences`.
+- Track: if answers often end with `outcome: "iteration_cap"` or the cost per question rises, revisit the cap (ADR 0012, which has the SQL). Shorthand citations like `(:690-692)` are not parsed yet.
+
+- `AnswerQuestion` (domain) owns the loop; `LoopPolicy` owns its limits (`CHAT_MAX_ITERATIONS`, default 8, see ADR 0012; `CHAT_TOKEN_BUDGET`, 200,000). The last allowed call runs with tools disabled so a capped question still answers. ADR 0011.
 - System prompts are versioned files: `prompts/<name>/<version>.md`. Never edit a version that has been used; add `v2.md` and bump `ANSWER_QUESTION_PROMPT` in `apps/api/src/chat/chat.constants.ts`. `llm_calls.prompt_version` records which one ran.
 - Claude Opus 5.5 rules the adapter depends on: replay assistant turns of the current loop verbatim (`providerContent`, thinking blocks included); keep `system` and `tools` identical for the whole loop; never send forced `tool_choice` (`any`/`tool` is a 400), `thinking: disabled`, `budget_tokens` or sampling parameters. Prices live in `anthropic-pricing.ts`; the API refuses to boot with a model it can't price.
 

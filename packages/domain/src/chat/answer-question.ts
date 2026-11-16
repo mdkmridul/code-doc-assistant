@@ -13,6 +13,7 @@ import type {
 } from '../ports/language-model';
 import type { LlmCallLog } from '../ports/llm-call-log';
 import type { ToolRegistry } from '../tools/tool-registry';
+import { resolveCitations } from './citations';
 import { SessionNotFoundError } from './errors';
 import type { LoopOutcome, LoopPolicy, LoopState } from './loop-policy';
 import type { SystemPrompt } from './system-prompt';
@@ -42,8 +43,10 @@ export interface AnswerQuestionResult {
   /** Model calls made for this question. */
   iterations: number;
   toolCalls: ToolCallTrace[];
-  /** Retrieved locations whose path the answer mentions. */
+  /** Line references in the answer that overlap code the model actually retrieved. */
   citations: Citation[];
+  /** Line references in the answer that no retrieved code backs (possible invention). */
+  unverifiedReferences: string[];
   usage: { inputTokens: number; outputTokens: number; costUsd: number };
 }
 
@@ -65,16 +68,6 @@ function toConversation(message: StoredMessage): ConversationMessage {
 }
 
 const roundUsd = (usd: number) => Math.round(usd * 1e6) / 1e6;
-
-function citedIn(answer: string, candidates: Citation[]): Citation[] {
-  const seen = new Set<string>();
-  return candidates.filter((c) => {
-    const key = `${c.path}:${String(c.startLine)}-${String(c.endLine)}`;
-    if (seen.has(key) || !answer.includes(c.path)) return false;
-    seen.add(key);
-    return true;
-  });
-}
 
 /**
  * Answers a question about the session's repository with an agent loop:
@@ -170,7 +163,7 @@ export class AnswerQuestion {
       });
     }
 
-    const citations = citedIn(answer, retrieved);
+    const { citations, unverifiedReferences } = resolveCitations(answer, retrieved);
     const stored = await chats.addAssistantMessage(sessionId, {
       content: answer,
       toolCalls: traces,
@@ -184,6 +177,7 @@ export class AnswerQuestion {
       iterations: state.iterations,
       toolCalls: traces,
       citations,
+      unverifiedReferences,
       usage,
     };
   }
