@@ -76,4 +76,5 @@ jobs:
 
       - name: API logs on failure
         if: failure()
-        run: docker compose logs api --tail 200
+        # The stack may never have started (e.g. the secret is missing): don't fail here too.
+        run: docker compose logs api --tail 200 || true
