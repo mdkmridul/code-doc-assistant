@@ -31,14 +31,20 @@ RUN DATABASE_URL=postgresql://build@localhost/build npx prisma generate \
 # Production dependencies and compiled output only.
 FROM manifests AS runtime
 # git: ingestion clones public repositories (ls-remote + shallow fetch).
+# openssl: the Prisma CLI's schema engine, for migrations run as a platform
+# release command in production (ADR 0022).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates \
+ && apt-get install -y --no-install-recommends git ca-certificates openssl \
  && rm -rf /var/lib/apt/lists/*
 RUN npm ci -w api -w @cda/domain --omit=dev --ignore-scripts && npm cache clean --force
 COPY --from=build /app/packages/domain/dist packages/domain/dist
 COPY --from=build /app/apps/api/dist apps/api/dist
 # System prompts are read at boot from <repo>/prompts.
 COPY prompts prompts
+# Schema, migrations and Prisma config: `npx prisma migrate deploy` from
+# apps/api applies them (ADR 0022).
+COPY apps/api/prisma apps/api/prisma
+COPY apps/api/prisma.config.ts apps/api/prisma.config.ts
 ENV NODE_ENV=production
 USER node
 WORKDIR /app/apps/api

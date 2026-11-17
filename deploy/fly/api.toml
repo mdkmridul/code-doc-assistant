@@ -1,0 +1,47 @@
+# API + ingest worker in one Fly machine (ADR 0022). Deploy from the repo root:
+#   fly deploy . --config deploy/fly/api.toml
+# Secrets (set once, never in this file):
+#   fly secrets set --app cda-api-ff8095 ANTHROPIC_API_KEY=... DATABASE_URL=... REDIS_URL=...
+app = "cda-api-ff8095"
+primary_region = "sin"
+
+[build]
+  dockerfile = "apps/api/Dockerfile"
+
+# Applies pending Prisma migrations before each new release starts; a failure stops the deploy.
+[deploy]
+  release_command = "npx prisma migrate deploy"
+
+[env]
+  NODE_ENV = "production"
+  API_PORT = "3001"
+  # The Ollama app on Fly's private network (no public address).
+  OLLAMA_URL = "http://cda-ollama-ff8095.internal:11434"
+  ANTHROPIC_MODEL = "claude-opus-5-5"
+  CHAT_MAX_ITERATIONS = "8"
+  CHAT_TOKEN_BUDGET = "200000"
+  CHAT_CONTEXT_BUDGET = "40000"
+  SESSION_QUESTIONS_PER_MINUTE = "6"
+  # Public, unauthenticated URL: keep spend low (ADR 0022).
+  DAILY_SPEND_CAP_USD = "2"
+  # The Vercel URL of the web app (CORS).
+  WEB_ORIGIN = "https://cda-web-ff8095.vercel.app"
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  # The machine also runs the ingest worker and holds SSE streams: keep it up.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

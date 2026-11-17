@@ -1,0 +1,13 @@
+# Ollama serving nomic-embed-text, private to Fly's network (ADR 0022). Deploy from the repo root:
+#   fly deploy . --config deploy/fly/ollama.toml
+# No [http_service]: it gets no public address; the API reaches it at
+# http://cda-ollama-ff8095.internal:11434.
+app = "cda-ollama-ff8095"
+primary_region = "sin"
+
+[build]
+  dockerfile = "deploy/ollama/Dockerfile"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"

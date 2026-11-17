@@ -2,7 +2,7 @@
 
 npm workspaces monorepo:
 
-- `apps/api` — NestJS backend (controllers, processors, MCP entrypoint)
+- `apps/api` — NestJS backend (controllers, the ingest processor). An MCP entrypoint was planned but is not built (README › Limitations).
 - `apps/web` — Next.js frontend (see `apps/web/CLAUDE.md`)
 - `packages/domain` — `@cda/domain`: entities, use cases and ports
 
@@ -75,7 +75,7 @@ Run from the repo root:
 - Domain use cases (`packages/domain/src/ingestion`) are plain classes; `apps/api/src/ingestion/ingestion.module.ts` builds them with factory providers. Don't add Nest decorators to domain code.
 - `@cda/domain` runs from `dist/` (ADR 0008). After changing domain code, restart the API; `prestart*`/`prebuild` rebuild it. Type-check, lint and tests read the source directly.
 
-- Controllers, processors and the MCP entrypoint call **use cases**.
+- Controllers and processors (and an MCP entrypoint, if one is added) call **use cases**.
 - Use cases depend on **ports** defined in `packages/domain`.
 - **Infrastructure** implements the ports. Dependencies point inward, never from domain to infrastructure.
 
